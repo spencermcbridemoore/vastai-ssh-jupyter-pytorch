@@ -1,0 +1,62 @@
+# Vast.ai SSH Configuration Template
+# Copy this to your ~/.ssh/config and fill in the details for your Vast.ai instances
+#
+# Usage:
+#   1. Get your Vast.ai instance SSH details from the Vast.ai dashboard
+#   2. Copy this template to ~/.ssh/config
+#   3. Replace [INSTANCE_ID], [IP], [PORT], [USERNAME] with your instance details
+#   4. Update the paths and port forwarding as needed
+
+# Example Vast.ai Instance Configuration
+Host vastai-instance-1
+    HostName [IP_ADDRESS]
+    Port [SSH_PORT]
+    User root
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    
+    # Persistent connection for faster reconnects
+    ControlMaster auto
+    ControlPath ~/.ssh/control-%h-%p-%r
+    ControlPersist 10m
+    
+    # Port forwarding for development tools
+    # TensorBoard (default port 6006, forwarded to local 8080)
+    LocalForward 8080 localhost:6006
+    
+    # Jupyter Notebook (if running, forwarded to local 8888)
+    LocalForward 8888 localhost:8888
+    
+    # VS Code Remote (if needed)
+    # LocalForward 52698 localhost:52698
+    
+    # Keep connection alive
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
+
+# Add more instances as needed
+# Host vastai-instance-2
+#     HostName [IP_ADDRESS_2]
+#     Port [SSH_PORT_2]
+#     User root
+#     IdentityFile ~/.ssh/id_rsa
+#     StrictHostKeyChecking no
+#     UserKnownHostsFile /dev/null
+#     ControlMaster auto
+#     ControlPath ~/.ssh/control-%h-%p-%r
+#     ControlPersist 10m
+#     LocalForward 8081 localhost:6006
+#     LocalForward 8889 localhost:8888
+#     ServerAliveInterval 60
+#     ServerAliveCountMax 3
+
+# Connection helper script usage:
+#   ssh vastai-instance-1
+#   
+# VS Code Remote-SSH:
+#   1. Install "Remote - SSH" extension
+#   2. Press F1, type "Remote-SSH: Connect to Host"
+#   3. Select "vastai-instance-1"
+#   4. VS Code will connect and you can open the workspace folder
+

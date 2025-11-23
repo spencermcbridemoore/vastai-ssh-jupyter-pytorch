@@ -35,6 +35,14 @@ ENV/
 *.pt
 *.ckpt
 
+# Checkpoints and outputs (keep structure, ignore contents)
+checkpoints/
+outputs/
+workspace/
+persistent/
+*.pt
+!**/checkpoint_metadata.json
+
 # IDE
 .vscode/
 .idea/
@@ -48,8 +56,25 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
+tensorboard/
 
 # Environment variables
 .env
 .env.local
+
+# Data (add your data directories here)
+data/
+datasets/
+
+# SSH config (contains sensitive info)
+.ssh/
+ssh_config
+
+# AWS credentials
+.aws/
+aws-credentials
+
+# Weights & Biases
+wandb/
 

@@ -1,0 +1,64 @@
+# Development Configuration
+# Small-scale testing configuration for cheap instances ($0.20-0.50/hr)
+# Use this for rapid iteration and debugging
+
+# Model Configuration
+model:
+  name: "example_model"
+  params: 1000000  # 1M parameters for dev
+  hidden_size: 512
+  num_layers: 4
+  dropout: 0.1
+
+# Data Configuration
+data:
+  path: "/workspace/data"
+  batch_size: 16  # Small batch size for dev
+  num_workers: 2  # Fewer workers for dev
+  sequence_length: 512
+  max_samples: 10000  # Limit dataset size for dev
+
+# Training Configuration
+training:
+  max_epochs: 5  # Few epochs for quick iteration
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  grad_clip: 1.0
+  warmup_steps: 100
+  checkpoint_interval: 500  # Checkpoint more frequently in dev
+  log_interval: 50
+  save_best: true
+
+# Validation Configuration
+validation:
+  interval: 1  # Validate every epoch
+  batch_size: 32
+
+# Device Configuration
+device:
+  use_cuda: true
+  cuda_device: 0
+
+# Experiment Tracking
+logging:
+  use_wandb: false  # Disable in dev to save API calls
+  wandb_project: "vastai-dev"
+  use_tensorboard: true
+  tensorboard_dir: "/workspace/logs/tensorboard"
+
+# Checkpoint Configuration
+checkpoint:
+  local_dir: "/workspace/persistent/checkpoints"
+  s3_bucket: null  # Set to your S3 bucket if using remote storage
+  s3_prefix: "checkpoints/dev"
+  keep_last_n: 3  # Keep fewer checkpoints in dev
+
+# Cost Tracking
+cost:
+  hourly_rate: 0.20  # Estimated hourly rate for dev instance
+  instance_type: "RTX 3090"  # Example
+
+# Development Flags
+dev_mode: true
+dry_run: false  # Set to true to validate code without using GPU
+

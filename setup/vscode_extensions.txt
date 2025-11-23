@@ -1,0 +1,38 @@
+# Required VS Code Extensions for Remote PyTorch Development
+# Install these extensions in VS Code/Cursor for the best development experience
+
+# Remote Development (Essential)
+ms-vscode-remote.remote-ssh
+ms-vscode-remote.remote-ssh-edit
+
+# Python Development
+ms-python.python
+ms-python.vscode-pylance
+ms-python.debugpy
+
+# Jupyter Support (for cell-based development)
+ms-toolsai.jupyter
+ms-toolsai.jupyter-keymap
+ms-toolsai.jupyter-renderers
+
+# Git
+eamodio.gitlens
+
+# YAML Support (for config files)
+redhat.vscode-yaml
+
+# Markdown Support
+yzhang.markdown-all-in-one
+
+# Optional but Recommended:
+# - GitHub Copilot (if available)
+# - Error Lens (for inline error display)
+# - Python Docstring Generator
+# - autoDocstring
+
+# Installation:
+# 1. Open VS Code/Cursor
+# 2. Go to Extensions (Ctrl+Shift+X)
+# 3. Search for each extension ID and install
+# 4. Or use: code --install-extension <extension-id>
+

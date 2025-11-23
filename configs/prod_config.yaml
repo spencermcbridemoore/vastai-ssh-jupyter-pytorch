@@ -1,0 +1,64 @@
+# Production Configuration
+# Full-scale training configuration for powerful GPU instances
+# Use this for final training runs on expensive instances
+
+# Model Configuration
+model:
+  name: "production_model"
+  params: 100000000  # 100M parameters
+  hidden_size: 1024
+  num_layers: 12
+  dropout: 0.1
+
+# Data Configuration
+data:
+  path: "/workspace/data"
+  batch_size: 64  # Larger batch size for production
+  num_workers: 8  # More workers for faster data loading
+  sequence_length: 2048
+  max_samples: null  # Use full dataset
+
+# Training Configuration
+training:
+  max_epochs: 100
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  grad_clip: 1.0
+  warmup_steps: 1000
+  checkpoint_interval: 2000  # Less frequent checkpoints in prod
+  log_interval: 100
+  save_best: true
+
+# Validation Configuration
+validation:
+  interval: 1  # Validate every epoch
+  batch_size: 128
+
+# Device Configuration
+device:
+  use_cuda: true
+  cuda_device: 0
+
+# Experiment Tracking
+logging:
+  use_wandb: true  # Enable in production
+  wandb_project: "vastai-production"
+  use_tensorboard: true
+  tensorboard_dir: "/workspace/logs/tensorboard"
+
+# Checkpoint Configuration
+checkpoint:
+  local_dir: "/workspace/persistent/checkpoints"
+  s3_bucket: "your-s3-bucket-name"  # Set to your S3 bucket
+  s3_prefix: "checkpoints/prod"
+  keep_last_n: 10  # Keep more checkpoints in prod
+
+# Cost Tracking
+cost:
+  hourly_rate: 2.00  # Estimated hourly rate for production instance
+  instance_type: "A100"  # Example
+
+# Development Flags
+dev_mode: false
+dry_run: false
+
