@@ -301,12 +301,16 @@ class ResidualComparisonRunner:
         for layer_idx in range(1, num_layers):  # skip embedding state at index 0
             base_layer = base_hidden[layer_idx][0]  # (seq, hidden)
             sft_layer = sft_hidden[layer_idx][0]
+            prev_base_layer = base_hidden[layer_idx - 1][0]
+            prev_sft_layer = sft_hidden[layer_idx - 1][0]
 
             layer_payload: Dict[str, Dict[str, Any]] = {}
             for pos in range(seq_len):
                 layer_payload[str(pos)] = self._compute_position_stats(
                     base_res=base_layer[pos],
                     sft_res=sft_layer[pos],
+                    prev_base_res=prev_base_layer[pos],
+                    prev_sft_res=prev_sft_layer[pos],
                     tokens=tokens,
                     position=pos,
                     tracked_ids=tracked_ids,
@@ -327,9 +331,12 @@ class ResidualComparisonRunner:
         tracked_ids: List[int],
         base_unembed: torch.Tensor,
         sft_unembed: torch.Tensor,
+        prev_base_res: Optional[torch.Tensor] = None,
+        prev_sft_res: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         """
-        Compute statistics for a single layer/position pair.
+        Compute statistics for a single layer/position pair, including
+        intra-model deltas versus the previous layer when available.
         """
         base_logits = torch.matmul(base_res, base_unembed.T)
         sft_logits = torch.matmul(sft_res, sft_unembed.T)
@@ -353,6 +360,18 @@ class ResidualComparisonRunner:
         norm_base = base_res.norm().item()
         norm_sft = sft_res.norm().item()
         norm_diff = (base_res - sft_res).norm().item()
+
+        base_cosine_prev = None
+        base_norm_delta = None
+        if prev_base_res is not None:
+            base_cosine_prev = F.cosine_similarity(base_res, prev_base_res, dim=0).item()
+            base_norm_delta = norm_base - prev_base_res.norm().item()
+
+        sft_cosine_prev = None
+        sft_norm_delta = None
+        if prev_sft_res is not None:
+            sft_cosine_prev = F.cosine_similarity(sft_res, prev_sft_res, dim=0).item()
+            sft_norm_delta = norm_sft - prev_sft_res.norm().item()
 
         tracked_logits = {}
         for token_id in tracked_ids:
@@ -379,6 +398,10 @@ class ResidualComparisonRunner:
             "norm_base": norm_base,
             "norm_sft": norm_sft,
             "norm_diff": norm_diff,
+            "base_cosine_prev": base_cosine_prev,
+            "base_norm_delta": base_norm_delta,
+            "sft_cosine_prev": sft_cosine_prev,
+            "sft_norm_delta": sft_norm_delta,
         }
 
 
