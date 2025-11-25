@@ -166,26 +166,45 @@ except ImportError:
     print("pandas not installed; skipping DataFrame summaries.")
 
 
-def summarize_cosine(result: Dict[str, object]) -> Dict[str, float]:
-    layer_means = {}
+def summarize_layer_metric(result: Dict[str, object], metric_name: str) -> Dict[int, float]:
+    """
+    Compute the mean of a metric across positions for each layer.
+    Skips entries where the metric is None.
+    """
+    layer_means: Dict[int, float] = {}
     for layer_idx, positions in result["layers"].items():
-        cosines = [entry["cosine_sim"] for entry in positions.values()]
-        layer_means[int(layer_idx)] = mean(cosines)
+        values = [
+            entry.get(metric_name)
+            for entry in positions.values()
+            if entry.get(metric_name) is not None
+        ]
+        if values:
+            layer_means[int(layer_idx)] = mean(values)
     return layer_means
 
 
 if pd is not None:
-    cosine_rows = []
+    summary_rows = []
+    metric_prefixes = {
+        "cosine_sim": "cross_cos",
+        "base_cosine_prev": "base_prev_cos",
+        "sft_cosine_prev": "sft_prev_cos",
+        "base_norm_delta": "base_norm_delta",
+        "sft_norm_delta": "sft_norm_delta",
+    }
     for item in results:
         row = {
             "prompt": item["metadata"].get("prompt_idx", -1),
             "variant": item["metadata"].get("variant_name", "identity"),
             "embedding_variant": item["metadata"].get("embedding_variant", "default"),
         }
-        row.update(summarize_cosine(item))
-        cosine_rows.append(row)
-    cosine_df = pd.DataFrame(cosine_rows)
-    display(cosine_df.head())
+        for metric, prefix in metric_prefixes.items():
+            summary = summarize_layer_metric(item, metric)
+            for layer_idx, value in summary.items():
+                row[f"{prefix}_L{layer_idx}"] = value
+        summary_rows.append(row)
+    summary_df = pd.DataFrame(summary_rows)
+    display(summary_df.head())
 
 # %% Manual Inspection
 if results:
