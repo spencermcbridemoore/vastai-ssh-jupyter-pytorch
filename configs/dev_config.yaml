@@ -62,3 +62,51 @@ cost:
 dev_mode: true
 dry_run: false  # Set to true to validate code without using GPU
 
+# Residual Comparison Experiment
+residual_compare:
+  base_model: "gpt2"
+  sft_model: "gpt2"
+  tokenizer: null
+  device: null
+  dtype: "auto"
+  top_k: 25
+  prompts:
+    - "Explain the moon landing in one paragraph."
+    - "Write a short Python function that adds two numbers."
+  prompt_variants:
+    - identity
+    - reverse_sentences
+    - dual_channel
+  prompt_variant_options:
+    dual_channel:
+      base_prefix: "BASE PROMPT:\\n"
+      sft_prefix: "SFT PROMPT:\\n"
+      order: "base_first"
+  tracked_token_strings:
+    - "ĠYes"
+    - "ĠNo"
+  interesting_token_map:
+    eos: "<|endoftext|>"
+  embedding_variants:
+    - name: "default"
+      base:
+        embedding_source: "base"
+        unembedding_source: "base"
+      sft:
+        embedding_source: "sft"
+        unembedding_source: "sft"
+    - name: "sft_unembed"
+      base:
+        embedding_source: "base"
+        unembedding_source: "sft"
+      sft:
+        embedding_source: "sft"
+        unembedding_source: "sft"
+    - name: "sft_embedding"
+      base:
+        embedding_source: "sft"
+        unembedding_source: "base"
+      sft:
+        embedding_source: "sft"
+        unembedding_source: "sft"
+

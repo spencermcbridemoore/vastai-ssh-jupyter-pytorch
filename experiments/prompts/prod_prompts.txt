@@ -1,0 +1,4 @@
+Describe the ethical considerations when deploying conversational AI in healthcare settings.
+Provide a numbered list of mitigations for model hallucinations during legal research.
+Produce a short SQL query that counts weekly active users grouped by region.
+

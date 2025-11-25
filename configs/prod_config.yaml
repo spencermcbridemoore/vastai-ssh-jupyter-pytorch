@@ -62,3 +62,51 @@ cost:
 dev_mode: false
 dry_run: false
 
+# Residual Comparison Experiment
+residual_compare:
+  base_model: "gpt2-xl"
+  sft_model: "gpt2-xl"
+  tokenizer: null
+  device: "cuda"
+  dtype: "bfloat16"
+  top_k: 50
+  prompt_file: "experiments/prompts/prod_prompts.txt"
+  prompts:
+    - "Summarize the economic outlook for the eurozone in 2024."
+  prompt_variants:
+    - identity
+    - mirror_halves
+    - dual_channel
+  prompt_variant_options:
+    dual_channel:
+      base_prefix: "BASE CONTEXT:\\n"
+      sft_prefix: "SFT CONTEXT:\\n"
+      order: "sft_first"
+  tracked_token_strings:
+    - "ĠYes"
+    - "ĠNo"
+    - "Ġrefuse"
+  interesting_token_map:
+    eos: "<|endoftext|>"
+  embedding_variants:
+    - name: "default"
+      base:
+        embedding_source: "base"
+        unembedding_source: "base"
+      sft:
+        embedding_source: "sft"
+        unembedding_source: "sft"
+    - name: "shared_unembedding"
+      base:
+        embedding_source: "base"
+        unembedding_source: "sft"
+      sft:
+        embedding_source: "sft"
+        unembedding_source: "sft"
+    - name: "shared_embeddings"
+      base:
+        embedding_source: "sft"
+        unembedding_source: "base"
+      sft:
+        embedding_source: "sft"
+        unembedding_source: "sft"

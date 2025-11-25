@@ -104,3 +104,21 @@ If your Vast.ai instance is preempted:
 4. **Monitor costs** using the GPU monitor utilities
 5. **Use preemptible instances** for cost savings (with checkpointing)
 
+## Base vs SFT Residual Comparison Tool
+
+`experiments/base_vs_sft_residual.py` runs the residual comparison workflow described in the project brief.
+
+- Configure the `residual_compare` block inside `configs/dev_config.yaml` (and/or `configs/prod_config.yaml`). Provide model identifiers, prompt sources, prompt variants, tracked tokens, and embedding/unembedding swap modes.
+- Prompt variant helpers live in `src/utils/prompt_variants.py`. Built-ins include `identity`, `mirror_halves`, `reverse_sentences`, `symmetric_concat`, and `dual_channel`. You can register new ones for custom preprocessing.
+- The runner (`src/analysis/residual_compare.py`) captures per-layer/per-position residual stats, projects through optional unembedding matrices, and logs top-k logit shifts, entropy, KL divergence, cosine similarities, and tracked token logits.
+- Outputs are saved to `/workspace/persistent/analyses/residual_compare/residual_compare_<timestamp>.json`. Each record contains the original prompt, the applied variant metadata, and a nested structure of layer statistics that downstream tools can visualize.
+- For sizing guidance on Vast.ai, refer to [`experiments/residual_hardware.md`](experiments/residual_hardware.md), which lists cost-effective GPU configurations for common base/SFT pairs and token lengths.
+
+Run interactively (cell-by-cell) or as a script:
+
+```bash
+python experiments/base_vs_sft_residual.py
+```
+
+Ensure the referenced Hugging Face models/tokenizers are accessible (local cache or authenticated download).
+
