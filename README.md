@@ -101,6 +101,17 @@ project/
    DEV_MODE = True
    ```
 
+## Manage Vast.ai Instances
+
+Use the helper script to identify which of your Vast.ai instances are currently running (requires `VASTAI_API_KEY` in either your shell environment or `.env` file):
+
+```bash
+python scripts/launch_vast.py status          # show running instances
+python scripts/launch_vast.py status --all    # include stopped instances
+```
+
+Each entry displays the GPU type, hourly rate, and ready-to-copy SSH command.
+
 ## Development Workflow
 
 ### Interactive Cell-by-Cell Execution
