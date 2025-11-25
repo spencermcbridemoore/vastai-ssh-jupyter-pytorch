@@ -111,6 +111,7 @@ If your Vast.ai instance is preempted:
 - Configure the `residual_compare` block inside `configs/dev_config.yaml` (and/or `configs/prod_config.yaml`). Provide model identifiers, prompt sources, prompt variants, tracked tokens, and embedding/unembedding swap modes.
 - Prompt variant helpers live in `src/utils/prompt_variants.py`. Built-ins include `identity`, `mirror_halves`, `reverse_sentences`, `symmetric_concat`, and `dual_channel`. You can register new ones for custom preprocessing.
 - The runner (`src/analysis/residual_compare.py`) captures per-layer/per-position residual stats, projects through optional unembedding matrices, and logs top-k logit shifts, entropy, KL divergence, cosine similarities, and tracked token logits.
+- Intra-model diagnostics (e.g., `base_cosine_prev`, `sft_norm_delta`) quantify how each model's residual stream evolves between adjacent layers, making it easier to spot depth-specific instabilities without comparing to the other model.
 - Outputs are saved to `/workspace/persistent/analyses/residual_compare/residual_compare_<timestamp>.json`. Each record contains the original prompt, the applied variant metadata, and a nested structure of layer statistics that downstream tools can visualize.
 - For sizing guidance on Vast.ai, refer to [`experiments/residual_hardware.md`](experiments/residual_hardware.md), which lists cost-effective GPU configurations for common base/SFT pairs and token lengths.
 

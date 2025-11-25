@@ -28,6 +28,7 @@ The `experiments/base_vs_sft_residual.py` script keeps both the base and SFT mod
 - Prices fluctuate, but as of late 2025, typical Vast.ai spot rates are roughly RTX 4090 24 GB ≈ $0.90/hr, A100 40 GB ≈ $1.60/hr, A100 80 GB ≈ $2.40/hr, H100 80 GB ≈ $4.50/hr. Multiply by GPU count for a ballpark cost.
 - Longer prompts increase activation memory by ~5–15 % because the experiment stores hidden states for every layer. Recommendations above already include that overhead; if you collect KV caches for generation or raise batch size, step up one tier.
 - To downsize hardware, consider sequentially loading base and SFT models (swapping to CPU between passes), enabling weight-only 4-bit quantization, or disabling residual capture for the earliest layers.
+- The JSON output now includes per-model cross-layer diagnostics (`*_cosine_prev`, `*_norm_delta`) in addition to cross-model comparisons, which can help debug depth-specific instabilities during analysis.
 - Always verify vRAM consumption with `nvidia-smi` when using custom prompt sets or precision modes.
 
 
