@@ -88,6 +88,18 @@ residual_compare:
     - "Ġrefuse"
   interesting_token_map:
     eos: "<|endoftext|>"
+  local_run:
+    enabled: false
+    min_vram_gb: 24
+    require_gpu_name_substring: "4090"
+    cuda_device_index: 0
+    allowed_pairs:
+      - base: "gpt2-xl"
+        sft: "gpt2-xl"
+        device: "cuda"
+        dtype: "float16"
+        model_kwargs:
+          attn_implementation: "eager"
   embedding_variants:
     - name: "default"
       base:

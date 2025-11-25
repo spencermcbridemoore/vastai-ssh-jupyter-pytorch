@@ -50,6 +50,72 @@ with open(config_path, "r", encoding="utf-8") as f:
 compare_cfg = config.get("residual_compare", {})
 if not compare_cfg:
     raise ValueError("Config missing 'residual_compare' section. Please update configs to run this experiment.")
+compare_cfg = dict(compare_cfg)  # copy so we can mutate safely without touching original config dict
+
+LOCAL_OVERRIDE_KEYS = ("device", "dtype", "tokenizer", "tokenizer_kwargs", "model_kwargs")
+
+
+def _match_local_pair(local_cfg: Dict[str, object], base_model: str, sft_model: str) -> Dict[str, object]:
+    allowed = local_cfg.get("allowed_pairs") or []
+    for entry in allowed:
+        if entry.get("base") == base_model and entry.get("sft") == sft_model:
+            return entry
+    raise ValueError(
+        f"Local run requested but pair ({base_model}, {sft_model}) is not listed in residual_compare.local_run.allowed_pairs."
+    )
+
+
+def _ensure_local_gpu(local_cfg: Dict[str, object]) -> Dict[str, object]:
+    if not torch.cuda.is_available():
+        raise RuntimeError("Local GPU execution requested, but torch.cuda.is_available() is False.")
+    device_index = int(local_cfg.get("cuda_device_index", 0) or 0)
+    if device_index >= torch.cuda.device_count():
+        raise RuntimeError(
+            f"cuda_device_index={device_index} is invalid; this machine exposes {torch.cuda.device_count()} CUDA device(s)."
+        )
+    torch.cuda.set_device(device_index)
+    device_name = torch.cuda.get_device_name(device_index)
+    required_name = local_cfg.get("require_gpu_name_substring")
+    if required_name and required_name.lower() not in device_name.lower():
+        raise RuntimeError(
+            f"Local GPU '{device_name}' does not contain required substring '{required_name}'. "
+            "Update residual_compare.local_run.require_gpu_name_substring if this is intentional."
+        )
+    props = torch.cuda.get_device_properties(device_index)
+    total_gib = props.total_memory / (1024 ** 3)
+    min_vram = float(local_cfg.get("min_vram_gb", 0) or 0)
+    if min_vram and total_gib + 1e-6 < min_vram:
+        raise RuntimeError(
+            f"GPU '{device_name}' exposes {total_gib:.2f} GiB, which is below the configured minimum ({min_vram} GiB)."
+        )
+    return {"index": device_index, "name": device_name, "total_gib": total_gib}
+
+
+def _apply_local_overrides(
+    base_cfg: Dict[str, object],
+    pair_cfg: Dict[str, object],
+    device_index: int,
+) -> Dict[str, object]:
+    updated = dict(base_cfg)
+    overrides = {key: pair_cfg[key] for key in LOCAL_OVERRIDE_KEYS if key in pair_cfg}
+    if "device" not in overrides:
+        overrides["device"] = f"cuda:{device_index}" if device_index else "cuda"
+    updated.update(overrides)
+    return updated
+
+
+local_run_cfg = compare_cfg.get("local_run") or {}
+if local_run_cfg.get("enabled"):
+    pair_cfg = _match_local_pair(local_run_cfg, compare_cfg["base_model"], compare_cfg["sft_model"])
+    gpu_info = _ensure_local_gpu(local_run_cfg)
+    compare_cfg = _apply_local_overrides(compare_cfg, pair_cfg, gpu_info["index"])
+    print(
+        "Local GPU execution enabled — "
+        f"running pair ({compare_cfg['base_model']}, {compare_cfg['sft_model']}) on "
+        f"GPU '{gpu_info['name']}' (index {gpu_info['index']}, {gpu_info['total_gib']:.2f} GiB)."
+    )
+    if pair_cfg.get("notes"):
+        print(f"Pair notes: {pair_cfg['notes']}")
 
 ANALYSIS_DIR = PERSISTENT / "analyses" / "residual_compare"
 ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)

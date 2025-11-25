@@ -31,4 +31,40 @@ The `experiments/base_vs_sft_residual.py` script keeps both the base and SFT mod
 - The JSON output now includes per-model cross-layer diagnostics (`*_cosine_prev`, `*_norm_delta`) in addition to cross-model comparisons, which can help debug depth-specific instabilities during analysis.
 - Always verify vRAM consumption with `nvidia-smi` when using custom prompt sets or precision modes.
 
+### Enabling local RTX 4090 runs
+
+You can force `experiments/base_vs_sft_residual.py` to run on your workstation’s RTX 4090 (24 GB) instead of renting a Vast.ai instance. Configure the new `residual_compare.local_run` block inside `configs/dev_config.yaml` or `configs/prod_config.yaml`:
+
+```
+residual_compare:
+  base_model: "gpt2"
+  sft_model: "gpt2"
+  ...
+  local_run:
+    enabled: true
+    min_vram_gb: 24
+    require_gpu_name_substring: "4090"
+    cuda_device_index: 0
+    allowed_pairs:
+      - base: "gpt2"
+        sft: "gpt2"
+        device: "cuda"
+        dtype: "float16"
+        notes: "Lightweight sanity-check pair for desktop runs"
+```
+
+How it works:
+
+- The script validates that CUDA is available, the selected GPU name contains `require_gpu_name_substring`, and that total VRAM meets `min_vram_gb`. It errors out immediately if any check fails—there is no silent fallback to remote execution.
+- Only model pairs listed under `allowed_pairs` may run locally. Each entry can override `device`, `dtype`, `tokenizer`, `tokenizer_kwargs`, or `model_kwargs`, so you can pin safe precision/settings per pair.
+- When a pair is approved, the script logs the GPU name, index, and VRAM before loading checkpoints so you can confirm the right device is in use.
+
+After toggling `enabled: true`, test a lightweight pair first:
+
+```
+DEV_MODE=true python experiments/base_vs_sft_residual.py
+```
+
+Watch the console for the “Local GPU execution enabled…” line and verify `nvidia-smi` stays below 24 GB before attempting heavier models.
+
 
