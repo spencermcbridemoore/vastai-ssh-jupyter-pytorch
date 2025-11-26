@@ -112,7 +112,7 @@ If your Vast.ai instance is preempted:
 - Prompt variant helpers live in `src/utils/prompt_variants.py`. Built-ins include `identity`, `mirror_halves`, `reverse_sentences`, `symmetric_concat`, and `dual_channel`. You can register new ones for custom preprocessing.
 - The runner (`src/analysis/residual_compare.py`) captures per-layer/per-position residual stats, projects through optional unembedding matrices, and logs top-k logit shifts, entropy, KL divergence, cosine similarities, and tracked token logits.
 - Intra-model diagnostics (e.g., `base_cosine_prev`, `sft_norm_delta`) quantify how each model's residual stream evolves between adjacent layers, making it easier to spot depth-specific instabilities without comparing to the other model.
-- Outputs are saved to `/workspace/persistent/analyses/residual_compare/residual_compare_<timestamp>.json`. Each record contains the original prompt, the applied variant metadata, and a nested structure of layer statistics that downstream tools can visualize.
+- Outputs are saved to `/workspace/persistent/analyses/residual_compare/residual_compare_<timestamp>_<model>.json`. The `<model>` suffix is the sanitized SFT model name (spaces, dashes, slashes → underscores) so you can immediately see which checkpoint produced which JSON. Each record contains the original prompt, the applied variant metadata, and a nested structure of layer statistics that downstream tools can visualize.
 - For sizing guidance on Vast.ai, refer to [`experiments/residual_hardware.md`](experiments/residual_hardware.md), which lists cost-effective GPU configurations for common base/SFT pairs and token lengths.
 
 Run interactively (cell-by-cell) or as a script:
@@ -122,4 +122,45 @@ python experiments/base_vs_sft_residual.py
 ```
 
 Ensure the referenced Hugging Face models/tokenizers are accessible (local cache or authenticated download).
+
+### Residual Analysis Toolkit
+
+After generating comparison JSON files, use `scripts/residual_report.py` for structured post-processing:
+
+- Load one or more JSON outputs (files, directories, or glob patterns) and materialize layer × token grids for residual metrics such as `norm_diff`, `entropy_delta`, `kl_div`, etc.
+- Summarize any metric along the layer or token axis (mean, std, min, max) and optionally export flattened hotspot tables (CSV/JSON/Parquet) to `persistent/analyses`.
+- Inspect tracked token logits by ID, view their logit/residual trajectories, or highlight where they appear in the recorded top-k logit deltas.
+
+Example:
+
+```bash
+python scripts/residual_report.py persistent/analyses/residual_compare/*.json \
+  --metric norm_diff --metric entropy_delta \
+  --axis layer --top-n 10 --token-id 42 \
+  --export persistent/analyses/residual_compare/hotspots.csv
+```
+
+Under the hood the CLI relies on the reusable modules in `src/analysis/residual_results/`:
+
+- `loader.py` – typed parsers with lazy iteration over residual JSON files.
+- `grids.py` – layer × token grid builders for residual metrics, tracked logits, and recorded top-k deltas.
+- `aggregations.py` – layer/token aggregations plus a registry for derived metrics (e.g., norm vs. KL correlations).
+- `insights.py` – higher-level helpers for hotspot detection, tracked-token trajectories, and table exports.
+
+These modules can be imported directly to build notebooks, dashboards, or bespoke analyses without rerunning the experiment itself.
+
+## A100 Residual Sweep
+
+Need to validate every supported model pair on a single A100 40 GB? Use the sweep helper:
+
+```bash
+python scripts/run_residual_sweep.py \
+  --config configs/dev_config.yaml \
+  --skip-existing
+```
+
+- The script reads `residual_compare.model_sweep` from the config, verifies the active GPU reports at least 40 GB, and runs `experiments/base_vs_sft_residual.py` once per entry.
+- Logs are streamed to `/workspace/persistent/analyses/residual_compare/logs/<index>_<name>.log` (or the repo-local fallback if `/workspace` isn’t writable). After each success a `<name>.done` marker captures metadata so reruns with `--skip-existing` can resume.
+- Use `--names qwen-3b qwen-7b` or `--limit 2` to target a subset, `--dry-run` to preview commands, or `--force` to bypass the GPU check for debugging.
+- Ensure you are already `huggingface-cli login`’d on the instance so larger checkpoints (e.g., Llama 3.1 8B) can download before the sweep begins.
 
