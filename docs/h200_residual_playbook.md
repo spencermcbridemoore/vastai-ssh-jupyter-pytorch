@@ -47,6 +47,7 @@ From your local workstation, use the new helper:
 ```bash
 python scripts/h200_residual_batch.py \
   --ssh-host vast-h200 \
+  --ssh-port 22 \
   --remote-dir /workspace/vastai-ssh-jupyter-pytorch \
   --local-output ./h200_outputs \
   --entries qwen-0.5b qwen-1.5b qwen-3b qwen-7b qwen-math-1.5b qwen-math-7b llama-3.1-8b \
@@ -66,6 +67,22 @@ What it does per entry:
 
 The helper can target the entire sweep by omitting `--entries`, and `--skip-existing`
 prevents rerunning pairs whose JSONs are already present locally.
+
+### Optional: Multi-pass residual captures
+
+- **Enable with config only when needed.** Set `residual_compare.multi_pass.enabled: true`
+  inside `configs/dev_config.yaml` (or `prod_config.yaml`) to run the four canonical
+  embedding/LLM combinations per prompt: BB, BS, SB, SS. The runner now emits
+  one prompt record per variant that contains both a `runs` section (single-model
+  stats) and a `pairwise` section (the six BB/BS/… diffs). Since prompt fuzzing
+  now defaults to `["identity"]`, storage stays roughly flat even though each
+  prompt yields more structured data. Re-add `prompt_variants` entries if you
+  still want perturbations.
+- **Analysis tooling understands the richer file.** Use
+  `scripts/residual_report.py ... --record-type runs` to summarize per-run grids,
+  or keep the default `pairwise` mode to review BB‑BS style diffs. Existing
+  helpers such as `build_residual_grid` continue to work because the `pairwise`
+  payload keeps the legacy schema.
 
 ## 4. Verify + teardown (`teardown`)
 

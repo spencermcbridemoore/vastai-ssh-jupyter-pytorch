@@ -9,16 +9,23 @@ import json
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
-from src.analysis.residual_results import iter_results
+from src.analysis.residual_results import iter_multi_pass_records, iter_results
 from src.analysis.residual_results.aggregations import layer_statistics, token_statistics
 from src.analysis.residual_results.grids import (
     LayerTokenGrid,
     available_residual_metrics,
+    available_run_metrics,
     build_logit_grid,
     build_residual_grid,
+    build_run_grid,
     build_topk_delta_grid,
 )
-from src.analysis.residual_results.insights import export_rows, relevant_logit_changes, top_metric_hotspots
+from src.analysis.residual_results.insights import (
+    export_rows,
+    relevant_logit_changes,
+    run_metric_hotspots,
+    top_metric_hotspots,
+)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -31,15 +38,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--metric",
         action="append",
-        default=["norm_diff"],
-        choices=available_residual_metrics(),
-        help="Residual metrics to summarize (default: norm_diff).",
+        help="Metrics to summarize (default depends on record type).",
     )
     parser.add_argument(
         "--axis",
         choices=["layer", "token"],
         default="layer",
         help="Axis for aggregations (layer or token level).",
+    )
+    parser.add_argument(
+        "--record-type",
+        choices=["pairwise", "runs"],
+        default="pairwise",
+        help="Summarize pairwise residual diffs (default) or single-run stats.",
     )
     parser.add_argument(
         "--top-n",
@@ -70,7 +81,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
+    if not args.metric:
+        args.metric = ["norm_diff" if args.record_type == "pairwise" else "norm"]
     export_rows_buffer: List[dict] = []
+
+    if args.record_type == "runs":
+        if args.token_ids:
+            raise ValueError("--token-id is currently only supported for pairwise summaries.")
+        _report_run_records(args, export_rows_buffer)
+    else:
+        _report_pairwise_records(args, export_rows_buffer)
+
+    if args.export and export_rows_buffer:
+        export_rows(export_rows_buffer, args.export)
+        print(f"\nExported {len(export_rows_buffer)} rows to {args.export}")
+
+
+def _report_pairwise_records(args: argparse.Namespace, export_rows_buffer: List[dict]) -> None:
+    metric_choices = set(available_residual_metrics())
+    for metric in args.metric:
+        if metric not in metric_choices:
+            raise ValueError(f"Unknown metric '{metric}'. Valid residual metrics: {sorted(metric_choices)}")
 
     for result in iter_results(*args.inputs):
         print("=" * 80)
@@ -110,9 +141,39 @@ def main(argv: Sequence[str] | None = None) -> None:
                 print(f"Token {token_id} top-k membership (increase):")
                 _print_grid_preview(topk_grid, limit=args.top_n)
 
-    if args.export and export_rows_buffer:
-        export_rows(export_rows_buffer, args.export)
-        print(f"\nExported {len(export_rows_buffer)} rows to {args.export}")
+
+def _report_run_records(args: argparse.Namespace, export_rows_buffer: List[dict]) -> None:
+    metric_choices = set(available_run_metrics())
+    for metric in args.metric:
+        if metric not in metric_choices:
+            raise ValueError(f"Unknown run metric '{metric}'. Valid options: {sorted(metric_choices)}")
+
+    found_records = False
+    for record in iter_multi_pass_records(*args.inputs):
+        found_records = True
+        print("=" * 80)
+        meta_preview = json.dumps(record.metadata)
+        print(f"Prompt length: {len(record.tokens)} tokens")
+        print(f"Metadata: {meta_preview}")
+
+        for run in record.runs:
+            print(
+                f"\nRun {run.name}: model={run.model}, embedding={run.embedding_source}, "
+                f"unembedding={run.unembedding_source}"
+            )
+            for metric in args.metric:
+                grid = build_run_grid(run, metric)
+                summaries = _summaries_for_axis(grid, axis=args.axis)
+                print(f"Metric '{metric}' ({args.axis} stats):")
+                _print_summaries(summaries, axis=args.axis, max_rows=args.top_n)
+
+                hotspots = run_metric_hotspots(run, metric=metric, top_n=args.top_n)
+                export_rows_buffer.extend({**row, "metric": metric, "run": run.name, "prompt_meta": record.metadata} for row in hotspots)
+                print(f"\nTop {len(hotspots)} hotspots (run={run.name}):")
+                _print_rows(hotspots)
+
+    if not found_records:
+        print("No multi-pass records found in provided inputs.")
 
 
 def _summaries_for_axis(grid: LayerTokenGrid, axis: str) -> Sequence[dict]:

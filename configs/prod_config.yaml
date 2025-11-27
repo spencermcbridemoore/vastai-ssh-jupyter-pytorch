@@ -73,10 +73,9 @@ residual_compare:
   prompt_file: "experiments/prompts/prod_prompts.txt"
   prompts:
     - "Summarize the economic outlook for the eurozone in 2024."
+  # Keep fuzzing/perturbations opt-in in production as well.
   prompt_variants:
     - identity
-    - mirror_halves
-    - dual_channel
   prompt_variant_options:
     dual_channel:
       base_prefix: "BASE CONTEXT:\\n"
@@ -108,6 +107,28 @@ residual_compare:
       sft:
         embedding_source: "sft"
         unembedding_source: "sft"
+  multi_pass:
+    enabled: false
+    runs:
+      - name: "BB"
+        model: "base"
+        embedding_source: "base"
+      - name: "BS"
+        model: "sft"
+        embedding_source: "base"
+      - name: "SB"
+        model: "base"
+        embedding_source: "sft"
+      - name: "SS"
+        model: "sft"
+        embedding_source: "sft"
+    pairwise_differences:
+      - ["BB", "BS"]
+      - ["BB", "SB"]
+      - ["BB", "SS"]
+      - ["BS", "SB"]
+      - ["BS", "SS"]
+      - ["SB", "SS"]
     - name: "shared_unembedding"
       base:
         embedding_source: "base"

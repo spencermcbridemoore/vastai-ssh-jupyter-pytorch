@@ -130,6 +130,8 @@ pip install -r requirements.txt
 - Read the full [README.md](README.md) for detailed documentation
 - Check [experiments/README.md](experiments/README.md) for experiment workflow
 - Customize `configs/dev_config.yaml` for your needs
+- Enable richer residual captures by setting `residual_compare.multi_pass.enabled: true`
+  (default prompt fuzzing is now off, so add back variants only when needed)
 - Create your own experiment from `template_experiment.py`
 
 ## Cost Tips

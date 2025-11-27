@@ -111,6 +111,7 @@ nvidia-smi
 1. **Update configurations**:
    - Edit `configs/dev_config.yaml` for your model/data
    - Adjust batch sizes, learning rates, etc.
+   - Residual experiments now ship with `prompt_variants: ["identity"]`; re-add fuzzing variants only when you need them, and flip `residual_compare.multi_pass.enabled: true` to capture the BB/BS/SB/SS passes plus all six diffs in one go.
 
 2. **Create your own experiment**:
    ```bash

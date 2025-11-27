@@ -9,22 +9,32 @@ Modules:
 """
 
 from .loader import (
+    MultiPassResidualRecord,
     ResidualResult,
     ResidualLayerStats,
     ResidualTokenStats,
+    ResidualRunLayerStats,
+    ResidualRunRecord,
+    ResidualRunTokenStats,
     ResultFileSummary,
     iter_result_files,
     iter_results,
+    iter_multi_pass_records,
     load_results,
 )
 
 __all__ = [
+    "MultiPassResidualRecord",
     "ResidualResult",
     "ResidualLayerStats",
     "ResidualTokenStats",
+    "ResidualRunLayerStats",
+    "ResidualRunRecord",
+    "ResidualRunTokenStats",
     "ResultFileSummary",
     "iter_result_files",
     "iter_results",
+    "iter_multi_pass_records",
     "load_results",
 ]
 

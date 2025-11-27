@@ -14,8 +14,8 @@ try:
 except ImportError:  # pragma: no cover - optional
     pd = None  # type: ignore
 
-from .grids import LayerTokenGrid, build_logit_grid, build_residual_grid
-from .loader import ResidualResult
+from .grids import LayerTokenGrid, build_logit_grid, build_residual_grid, build_run_grid
+from .loader import ResidualResult, ResidualRunRecord
 
 PathLike = Union[str, Path]
 
@@ -27,6 +27,18 @@ def top_metric_hotspots(result: ResidualResult, metric: str = "norm_diff", top_n
     grid = build_residual_grid(result, metric)
     records = _grid_to_records(grid)
     records.sort(key=lambda row: abs(row["value"]), reverse=True)
+    return records[:top_n]
+
+
+def run_metric_hotspots(run: ResidualRunRecord, metric: str = "norm", top_n: int = 20) -> List[Mapping[str, object]]:
+    """
+    Return the largest absolute values for a single-run metric across the layer × token grid.
+    """
+    grid = build_run_grid(run, metric)
+    records = _grid_to_records(grid)
+    records.sort(key=lambda row: abs(row["value"]), reverse=True)
+    for row in records:
+        row["run_name"] = run.name
     return records[:top_n]
 
 

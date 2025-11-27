@@ -8,9 +8,10 @@ statistics and quantifies divergence between models layer-by-layer.
 
 from __future__ import annotations
 
+import itertools
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -57,6 +58,139 @@ class ModelSwapSpec:
         if unemb_src not in SOURCE_CHOICES:
             raise ValueError(f"unembedding_source must be one of {SOURCE_CHOICES + ('self',)}")
         return ModelSwapSpec(embedding_source=emb_src, unembedding_source=unemb_src)
+
+
+@dataclass(frozen=True)
+class ModelPassSpec:
+    """Describes a single forward pass variant for multi-pass runs."""
+
+    name: str
+    model: ModelKey
+    embedding_source: ModelKey
+    unembedding_source: Optional[ModelKey] = None
+
+    def normalize(self) -> "ModelPassSpec":
+        if not self.name:
+            raise ValueError("ModelPassSpec.name must be provided.")
+        if self.model not in SOURCE_CHOICES:
+            raise ValueError(f"ModelPassSpec.model must be one of {SOURCE_CHOICES}.")
+        if self.embedding_source not in SOURCE_CHOICES:
+            raise ValueError(f"ModelPassSpec.embedding_source must be one of {SOURCE_CHOICES}.")
+        resolved_unembed = self.unembedding_source or self.model
+        if resolved_unembed not in SOURCE_CHOICES:
+            raise ValueError(f"ModelPassSpec.unembedding_source must be one of {SOURCE_CHOICES}.")
+        return ModelPassSpec(
+            name=self.name,
+            model=self.model,
+            embedding_source=self.embedding_source,
+            unembedding_source=resolved_unembed,
+        )
+
+    def to_swap_spec(self) -> ModelSwapSpec:
+        norm = self.normalize()
+        return ModelSwapSpec(
+            embedding_source=norm.embedding_source,
+            unembedding_source=norm.unembedding_source,
+        )
+
+
+@dataclass(frozen=True)
+class PairwiseDiffSpec:
+    """Defines which two passes should be contrasted."""
+
+    base_run: str
+    sft_run: str
+    name: Optional[str] = None
+
+    def resolved_name(self) -> str:
+        return self.name or f"{self.base_run}-{self.sft_run}"
+
+
+@dataclass(frozen=True)
+class MultiPassPlan:
+    """Normalized configuration for multi-pass comparisons."""
+
+    runs: Tuple[ModelPassSpec, ...]
+    pairwise: Tuple[PairwiseDiffSpec, ...]
+
+    @staticmethod
+    def _default_runs() -> Tuple[ModelPassSpec, ...]:
+        return tuple(
+            ModelPassSpec(name=name, model=model, embedding_source=embedding).normalize()
+            for name, model, embedding in (
+                ("BB", "base", "base"),
+                ("BS", "sft", "base"),
+                ("SB", "base", "sft"),
+                ("SS", "sft", "sft"),
+            )
+        )
+
+    @staticmethod
+    def _all_pairs(runs: Sequence[ModelPassSpec]) -> Tuple[PairwiseDiffSpec, ...]:
+        specs: List[PairwiseDiffSpec] = []
+        for left, right in itertools.combinations(runs, 2):
+            specs.append(PairwiseDiffSpec(base_run=left.name, sft_run=right.name))
+        return tuple(specs)
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "MultiPassPlan":
+        runs_payload = payload.get("runs") if payload else None
+        run_specs: List[ModelPassSpec] = []
+        if runs_payload:
+            for entry in runs_payload:
+                if not isinstance(entry, Mapping):
+                    raise ValueError("Each multi_pass run must be a mapping.")
+                model_value = entry.get("model", "base") or "base"
+                embedding_value = entry.get("embedding_source", model_value) or model_value
+                unembedding_value = entry.get("unembedding_source") or None
+                spec = ModelPassSpec(
+                    name=str(entry.get("name", "")).strip(),
+                    model=str(model_value),
+                    embedding_source=str(embedding_value),
+                    unembedding_source=str(unembedding_value) if unembedding_value else None,
+                ).normalize()
+                run_specs.append(spec)
+        else:
+            run_specs = list(cls._default_runs())
+
+        if not run_specs:
+            raise ValueError("multi_pass.runs must define at least one entry.")
+
+        pairs_payload = payload.get("pairwise_differences") if payload else None
+        pair_specs: List[PairwiseDiffSpec] = []
+        if pairs_payload:
+            for entry in pairs_payload:
+                if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                    pair_specs.append(
+                        PairwiseDiffSpec(base_run=str(entry[0]), sft_run=str(entry[1]), name=entry[2] if len(entry) > 2 else None)
+                    )
+                    continue
+                if isinstance(entry, Mapping):
+                    base_name = entry.get("base") or entry.get("lhs")
+                    sft_name = entry.get("sft") or entry.get("rhs")
+                    if not base_name or not sft_name:
+                        raise ValueError("Pairwise mapping entries must include 'base'/'sft' (or 'lhs'/'rhs').")
+                    pair_specs.append(
+                        PairwiseDiffSpec(
+                            base_run=str(base_name),
+                            sft_run=str(sft_name),
+                            name=entry.get("name"),
+                        )
+                    )
+                    continue
+                raise ValueError("Each multi_pass pairwise entry must be a list[base, sft] or mapping.")
+        else:
+            pair_specs = list(cls._all_pairs(run_specs))
+
+        run_names = {spec.name for spec in run_specs}
+        for pair in pair_specs:
+            if pair.base_run not in run_names or pair.sft_run not in run_names:
+                raise ValueError(
+                    f"Pairwise diff '{pair.resolved_name()}' references unknown runs "
+                    f"({pair.base_run}, {pair.sft_run}). Available runs: {sorted(run_names)}"
+                )
+
+        return MultiPassPlan(runs=tuple(run_specs), pairwise=tuple(pair_specs))
 
 
 def _device_from_str(device: Optional[str]) -> torch.device:
@@ -187,17 +321,11 @@ class ResidualComparisonRunner:
             resolved[name] = token_id
         return resolved
 
-    def compare_prompt(
+    def _prepare_prompt(
         self,
         prompt: str,
-        *,
-        swap_options: Optional[Dict[ModelKey, ModelSwapSpec]] = None,
-        tracked_token_ids: Optional[List[int]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Compare base vs SFT models on a single prompt and return JSON-serializable stats.
-        """
+        tracked_token_ids: Optional[List[int]],
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], List[str], List[int]]:
         encoded = self.tokenizer(
             prompt,
             return_tensors="pt",
@@ -208,14 +336,26 @@ class ResidualComparisonRunner:
         attention_mask = encoded["attention_mask"].to(self.device) if "attention_mask" in encoded else None
         tokens = self.tokenizer.convert_ids_to_tokens(input_ids[0])
 
-        swap_options = swap_options or {}
-        base_spec = swap_options.get("base", ModelSwapSpec()).normalize("base")
-        sft_spec = swap_options.get("sft", ModelSwapSpec()).normalize("sft")
-
         tracked_ids = set(self.default_tracked_ids)
         if tracked_token_ids:
             tracked_ids.update(tracked_token_ids)
         tracked_ids.update(self.interesting_token_ids.values())
+        return input_ids, attention_mask, tokens, sorted(tracked_ids)
+
+    def compare_prompt(
+        self,
+        prompt: str,
+        *,
+        swap_options: Optional[Dict[ModelKey, ModelSwapSpec]] = None,
+        tracked_token_ids: Optional[List[int]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Compare base vs SFT models on a single prompt and return JSON stats."""
+        input_ids, attention_mask, tokens, tracked_ids = self._prepare_prompt(prompt, tracked_token_ids)
+
+        swap_options = swap_options or {}
+        base_spec = swap_options.get("base", ModelSwapSpec()).normalize("base")
+        sft_spec = swap_options.get("sft", ModelSwapSpec()).normalize("sft")
 
         base_hidden = self._forward_with_hidden_states("base", self.base_model, input_ids, attention_mask, base_spec)
         sft_hidden = self._forward_with_hidden_states("sft", self.sft_model, input_ids, attention_mask, sft_spec)
@@ -237,6 +377,104 @@ class ResidualComparisonRunner:
                 "sft": sft_spec.__dict__,
             },
             "layers": layer_stats,
+        }
+
+    def compare_prompt_multi(
+        self,
+        prompt: str,
+        *,
+        pass_specs: Sequence[ModelPassSpec],
+        pair_specs: Sequence[PairwiseDiffSpec],
+        tracked_token_ids: Optional[List[int]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Execute multiple forward passes (e.g., BB/BS/SB/SS) and emit both per-run stats
+        and pairwise differences reusing the legacy schema.
+        """
+        if not pass_specs:
+            raise ValueError("compare_prompt_multi requires at least one pass_spec.")
+        input_ids, attention_mask, tokens, tracked_ids = self._prepare_prompt(prompt, tracked_token_ids)
+        normalized_passes = tuple(spec.normalize() for spec in pass_specs)
+        if len(normalized_passes) < 2 and pair_specs:
+            raise ValueError("At least two runs are required when pairwise comparisons are requested.")
+
+        metadata = metadata or {}
+        pass_lookup = {spec.name: spec for spec in normalized_passes}
+        if len(pass_lookup) != len(normalized_passes):
+            raise ValueError("All multi_pass run names must be unique.")
+
+        hidden_cache: Dict[str, List[torch.Tensor]] = {}
+        run_payloads: List[Dict[str, Any]] = []
+
+        for spec in normalized_passes:
+            model_ref = self.base_model if spec.model == "base" else self.sft_model
+            swap_spec = spec.to_swap_spec()
+            hidden_states = self._forward_with_hidden_states(spec.model, model_ref, input_ids, attention_mask, swap_spec)
+            hidden_cache[spec.name] = hidden_states
+            unembedding = self.param_snapshots[swap_spec.unembedding_source]["unembedding"].to(self.device)
+            run_layers = self._assemble_single_run_stats(
+                hidden_states=hidden_states,
+                tokens=tokens,
+                tracked_ids=tracked_ids,
+                unembedding=unembedding,
+            )
+            run_payloads.append(
+                {
+                    "name": spec.name,
+                    "model": spec.model,
+                    "embedding_source": spec.embedding_source,
+                    "unembedding_source": swap_spec.unembedding_source,
+                    "layers": run_layers,
+                    "metadata": {**metadata, "run_name": spec.name},
+                }
+            )
+
+        pair_payloads: List[Dict[str, Any]] = []
+        for pair in pair_specs:
+            base_spec = pass_lookup.get(pair.base_run)
+            sft_spec = pass_lookup.get(pair.sft_run)
+            if not base_spec or not sft_spec:
+                raise ValueError(f"Pairwise diff references unknown runs: {pair.base_run}, {pair.sft_run}")
+            base_hidden = hidden_cache[base_spec.name]
+            sft_hidden = hidden_cache[sft_spec.name]
+            base_swap = base_spec.to_swap_spec()
+            sft_swap = sft_spec.to_swap_spec()
+            pair_layers = self._assemble_stats(
+                base_hidden=base_hidden,
+                sft_hidden=sft_hidden,
+                tokens=tokens,
+                tracked_ids=tracked_ids,
+                spec_pair=(base_swap, sft_swap),
+            )
+            pair_payloads.append(
+                {
+                    "name": pair.resolved_name(),
+                    "base_run": base_spec.name,
+                    "sft_run": sft_spec.name,
+                    "prompt": prompt,
+                    "tokens": tokens,
+                    "metadata": {
+                        **metadata,
+                        "base_run": base_spec.name,
+                        "sft_run": sft_spec.name,
+                        "pair_name": pair.resolved_name(),
+                    },
+                    "swap_options": {
+                        "base": base_swap.__dict__,
+                        "sft": sft_swap.__dict__,
+                    },
+                    "layers": pair_layers,
+                }
+            )
+
+        return {
+            "format_version": 2,
+            "prompt": prompt,
+            "tokens": tokens,
+            "metadata": {**metadata, "multi_pass": True},
+            "runs": run_payloads,
+            "pairwise": pair_payloads,
         }
 
     def _forward_with_hidden_states(
@@ -275,6 +513,34 @@ class ResidualComparisonRunner:
 
         hidden_states = list(outputs.hidden_states)  # type: ignore[attr-defined]
         return hidden_states
+
+    def _assemble_single_run_stats(
+        self,
+        *,
+        hidden_states: List[torch.Tensor],
+        tokens: List[str],
+        tracked_ids: List[int],
+        unembedding: torch.Tensor,
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        if not hidden_states:
+            return {}
+        seq_len = hidden_states[0].shape[1]
+        run_layers: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for layer_idx in range(1, len(hidden_states)):
+            current_layer = hidden_states[layer_idx][0]
+            prev_layer = hidden_states[layer_idx - 1][0]
+            layer_payload: Dict[str, Dict[str, Any]] = {}
+            for pos in range(seq_len):
+                layer_payload[str(pos)] = self._compute_single_position_stats(
+                    resid=current_layer[pos],
+                    prev_resid=prev_layer[pos],
+                    tokens=tokens,
+                    position=pos,
+                    tracked_ids=tracked_ids,
+                    unembedding=unembedding,
+                )
+            run_layers[str(layer_idx - 1)] = layer_payload
+        return run_layers
 
     def _assemble_stats(
         self,
@@ -402,6 +668,47 @@ class ResidualComparisonRunner:
             "base_norm_delta": base_norm_delta,
             "sft_cosine_prev": sft_cosine_prev,
             "sft_norm_delta": sft_norm_delta,
+        }
+
+    def _compute_single_position_stats(
+        self,
+        *,
+        resid: torch.Tensor,
+        prev_resid: Optional[torch.Tensor],
+        tokens: List[str],
+        position: int,
+        tracked_ids: List[int],
+        unembedding: torch.Tensor,
+    ) -> Dict[str, Any]:
+        logits = torch.matmul(resid, unembedding.T)
+        log_probs = F.log_softmax(logits, dim=-1)
+        probs = log_probs.exp()
+        entropy = -(probs * log_probs).sum().item()
+        norm_val = resid.norm().item()
+        norm_delta = None
+        cosine_prev = None
+        if prev_resid is not None:
+            prev_norm = prev_resid.norm().item()
+            norm_delta = norm_val - prev_norm
+            cosine_prev = F.cosine_similarity(resid, prev_resid, dim=0).item()
+        top_k = min(self.top_k, logits.shape[-1])
+        if top_k > 0:
+            top_vals = torch.topk(logits, k=top_k)
+            top_payload = {
+                "indices": top_vals.indices.tolist(),
+                "values": [round(v, 6) for v in top_vals.values.tolist()],
+            }
+        else:
+            top_payload = {"indices": [], "values": []}
+        tracked_logits = {str(token_id): logits[token_id].item() for token_id in tracked_ids}
+        return {
+            "token": tokens[position] if position < len(tokens) else "",
+            "entropy": entropy,
+            "norm": norm_val,
+            "norm_delta": norm_delta,
+            "cosine_prev": cosine_prev,
+            "top_k_logits": top_payload,
+            "tracked_token_logits": tracked_logits,
         }
 
 

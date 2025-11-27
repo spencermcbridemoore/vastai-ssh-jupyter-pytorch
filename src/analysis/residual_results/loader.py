@@ -82,6 +82,36 @@ class ResidualLayerStats:
 
 
 @dataclass(frozen=True)
+class ResidualRunTokenStats:
+    token: str
+    entropy: float
+    norm: float
+    norm_delta: Optional[float]
+    cosine_prev: Optional[float]
+    top_k_logits: TopKShift
+    tracked_token_logits: Mapping[int, float]
+
+
+@dataclass(frozen=True)
+class ResidualRunLayerStats:
+    layer_index: int
+    positions: Tuple[ResidualRunTokenStats, ...]
+
+    def position(self, idx: int) -> ResidualRunTokenStats:
+        return self.positions[idx]
+
+
+@dataclass(frozen=True)
+class ResidualRunRecord:
+    name: str
+    model: str
+    embedding_source: str
+    unembedding_source: str
+    metadata: Mapping[str, Any]
+    layers: Tuple[ResidualRunLayerStats, ...]
+
+
+@dataclass(frozen=True)
 class ResidualResult:
     prompt: str
     tokens: Tuple[str, ...]
@@ -95,6 +125,15 @@ class ResidualResult:
 
     def num_tokens(self) -> int:
         return len(self.tokens)
+
+
+@dataclass(frozen=True)
+class MultiPassResidualRecord:
+    prompt: str
+    tokens: Tuple[str, ...]
+    metadata: Mapping[str, Any]
+    runs: Tuple[ResidualRunRecord, ...]
+    pairwise: Tuple[ResidualResult, ...]
 
 
 @dataclass(frozen=True)
@@ -132,16 +171,21 @@ def load_results(path: PathLike) -> List[ResidualResult]:
 
 
 def iter_results(*paths_or_globs: PathLike) -> Iterator[ResidualResult]:
-    """Yield ResidualResult entries from each provided file/glob lazily."""
-    for file_path in iter_result_files(*paths_or_globs):
-        with open(file_path, "r", encoding="utf-8") as handle:
-            raw_payload = json.load(handle)
-        if not isinstance(raw_payload, list):
-            raise ValueError(f"Expected list at root of {file_path}, found {type(raw_payload).__name__}")
-        for record in raw_payload:
-            if not isinstance(record, MutableMapping):
-                raise ValueError(f"Each record must be a mapping in {file_path}")
-            yield _parse_record(record)
+    """Yield ResidualResult entries (pairwise diffs) from each provided file/glob lazily."""
+    for record in _iter_raw_records(*paths_or_globs):
+        if "runs" in record:
+            multi_record = _parse_multi_pass_record(record)
+            for pair in multi_record.pairwise:
+                yield pair
+            continue
+        yield _parse_single_result(record)
+
+
+def iter_multi_pass_records(*paths_or_globs: PathLike) -> Iterator[MultiPassResidualRecord]:
+    """Yield multi-pass entries (if present) from the provided files."""
+    for record in _iter_raw_records(*paths_or_globs):
+        if "runs" in record:
+            yield _parse_multi_pass_record(record)
 
 
 def summarize_file(path: PathLike) -> ResultFileSummary:
@@ -157,7 +201,19 @@ def summarize_file(path: PathLike) -> ResultFileSummary:
     )
 
 
-def _parse_record(record: MutableMapping[str, Any]) -> ResidualResult:
+def _iter_raw_records(*paths_or_globs: PathLike) -> Iterator[MutableMapping[str, Any]]:
+    for file_path in iter_result_files(*paths_or_globs):
+        with open(file_path, "r", encoding="utf-8") as handle:
+            raw_payload = json.load(handle)
+        if not isinstance(raw_payload, list):
+            raise ValueError(f"Expected list at root of {file_path}, found {type(raw_payload).__name__}")
+        for record in raw_payload:
+            if not isinstance(record, MutableMapping):
+                raise ValueError(f"Each record must be a mapping in {file_path}")
+            yield record
+
+
+def _parse_single_result(record: MutableMapping[str, Any]) -> ResidualResult:
     prompt = str(record.get("prompt", ""))
     tokens = tuple(str(token) for token in record.get("tokens", []))
     metadata = record.get("metadata") or {}
@@ -192,6 +248,35 @@ def _parse_record(record: MutableMapping[str, Any]) -> ResidualResult:
     )
 
 
+def _parse_multi_pass_record(record: MutableMapping[str, Any]) -> MultiPassResidualRecord:
+    prompt = str(record.get("prompt", ""))
+    tokens = tuple(str(token) for token in record.get("tokens", []))
+    metadata = record.get("metadata") or {}
+
+    run_payloads = record.get("runs") or []
+    runs: List[ResidualRunRecord] = []
+    for entry in run_payloads:
+        if not isinstance(entry, Mapping):
+            raise ValueError("Each multi_pass run entry must be a mapping.")
+        runs.append(_parse_run_entry(entry))
+
+    pair_payloads = record.get("pairwise") or []
+    pair_results: List[ResidualResult] = []
+    for entry in pair_payloads:
+        if not isinstance(entry, MutableMapping):
+            raise ValueError("Each multi_pass pairwise entry must be a mapping.")
+        normalized = _normalize_pair_entry(entry, prompt, tokens, metadata)
+        pair_results.append(_parse_single_result(normalized))
+
+    return MultiPassResidualRecord(
+        prompt=prompt,
+        tokens=tokens,
+        metadata=metadata,
+        runs=tuple(runs),
+        pairwise=tuple(pair_results),
+    )
+
+
 def _parse_swap(payload: Mapping[str, Any]) -> SwapOptions:
     return SwapOptions(
         embedding_source=str(payload.get("embedding_source", "base")),
@@ -207,6 +292,90 @@ def _parse_positions(layer_payload: Mapping[str, Any]) -> Tuple[ResidualTokenSta
             raise ValueError(f"Layer position '{pos_key}' must be a mapping.")
         ordered_positions.append(_parse_position_stats(pos_payload))
     return tuple(ordered_positions)
+
+
+def _parse_run_entry(payload: Mapping[str, Any]) -> ResidualRunRecord:
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        raise ValueError("Run entry missing 'name'.")
+    model = str(payload.get("model", "")).strip()
+    embedding = str(payload.get("embedding_source", "")).strip()
+    unembedding = str(payload.get("unembedding_source", "")).strip()
+    layers_payload = payload.get("layers")
+    if not isinstance(layers_payload, Mapping):
+        raise ValueError(f"Run '{name}' layers payload must be a mapping.")
+    layers = _parse_run_layers(layers_payload)
+    metadata = payload.get("metadata") or {}
+    return ResidualRunRecord(
+        name=name,
+        model=model,
+        embedding_source=embedding,
+        unembedding_source=unembedding,
+        metadata=metadata,
+        layers=layers,
+    )
+
+
+def _parse_run_layers(payload: Mapping[str, Any]) -> Tuple[ResidualRunLayerStats, ...]:
+    layers: List[ResidualRunLayerStats] = []
+    for layer_key in sorted(payload.keys(), key=lambda x: int(x)):
+        entries = payload[layer_key]
+        if not isinstance(entries, Mapping):
+            raise ValueError(f"Run layer '{layer_key}' payload must be a mapping.")
+        positions = _parse_run_positions(entries)
+        layers.append(
+            ResidualRunLayerStats(
+                layer_index=int(layer_key),
+                positions=positions,
+            )
+        )
+    return tuple(layers)
+
+
+def _parse_run_positions(payload: Mapping[str, Any]) -> Tuple[ResidualRunTokenStats, ...]:
+    ordered: List[ResidualRunTokenStats] = []
+    for pos_key in sorted(payload.keys(), key=lambda x: int(x)):
+        entry = payload[pos_key]
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"Run position '{pos_key}' must be a mapping.")
+        ordered.append(_parse_run_position(entry))
+    return tuple(ordered)
+
+
+def _parse_run_position(payload: Mapping[str, Any]) -> ResidualRunTokenStats:
+    tracked_payload = payload.get("tracked_token_logits") or {}
+    tracked: Dict[int, float] = {}
+    for token_id, value in tracked_payload.items():
+        if value is None:
+            continue
+        try:
+            tracked[int(token_id)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return ResidualRunTokenStats(
+        token=str(payload.get("token", "")),
+        entropy=float(payload.get("entropy", 0.0)),
+        norm=float(payload.get("norm", 0.0)),
+        norm_delta=_optional_float(payload.get("norm_delta")),
+        cosine_prev=_optional_float(payload.get("cosine_prev")),
+        top_k_logits=_parse_topk(payload.get("top_k_logits")),
+        tracked_token_logits=tracked,
+    )
+
+
+def _normalize_pair_entry(
+    entry: MutableMapping[str, Any],
+    prompt: str,
+    tokens: Tuple[str, ...],
+    parent_metadata: Mapping[str, Any],
+) -> MutableMapping[str, Any]:
+    normalized: MutableMapping[str, Any] = dict(entry)
+    normalized.setdefault("prompt", prompt)
+    normalized.setdefault("tokens", list(tokens))
+    existing_meta = normalized.get("metadata") or {}
+    merged_meta = {**parent_metadata, **existing_meta}
+    normalized["metadata"] = merged_meta
+    return normalized
 
 
 def _parse_position_stats(position: Mapping[str, Any]) -> ResidualTokenStats:

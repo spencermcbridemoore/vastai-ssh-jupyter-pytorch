@@ -28,7 +28,7 @@ except ImportError:
     def display(obj):  # type: ignore
         print(obj)
 
-from src.analysis.residual_compare import ModelSwapSpec, ResidualComparisonRunner
+from src.analysis.residual_compare import ModelSwapSpec, MultiPassPlan, ResidualComparisonRunner
 from src.utils.prompt_variants import generate_variants
 
 print(f"CUDA available: {torch.cuda.is_available()}")
@@ -262,6 +262,14 @@ embedding_variants = compare_cfg.get(
         }
     ],
 )
+multi_pass_cfg = compare_cfg.get("multi_pass") or {}
+multi_pass_plan = None
+if multi_pass_cfg.get("enabled"):
+    multi_pass_plan = MultiPassPlan.from_payload(multi_pass_cfg)
+    if len(embedding_variants) > 1:
+        print(
+            "multi_pass.enabled=True — ignoring embedding_variants list in favor of configured runs."
+        )
 
 # %% Comparison Loop
 results = []
@@ -272,14 +280,29 @@ for prompt_idx, raw_prompt in enumerate(prompts):
         variant_options=variant_options,
     )
     for variant_name, variant_prompt in variant_texts.items():
+        base_metadata = {
+            "prompt_idx": prompt_idx,
+            "variant_name": variant_name,
+        }
+        if multi_pass_plan:
+            metadata = {**base_metadata, "embedding_variant": "multi_pass"}
+            payload = runner.compare_prompt_multi(
+                variant_prompt,
+                pass_specs=multi_pass_plan.runs,
+                pair_specs=multi_pass_plan.pairwise,
+                metadata=metadata,
+            )
+            results.append(payload)
+            print(
+                f"Completed prompt {prompt_idx} variant '{variant_name}' via multi_pass "
+                f"(runs={len(payload['runs'])}, pairwise={len(payload['pairwise'])})"
+            )
+            continue
+
         for variant in embedding_variants:
             base_spec = _spec_from_dict(variant.get("base", {}), "base")
             sft_spec = _spec_from_dict(variant.get("sft", {}), "sft")
-            metadata = {
-                "prompt_idx": prompt_idx,
-                "variant_name": variant_name,
-                "embedding_variant": variant["name"],
-            }
+            metadata = {**base_metadata, "embedding_variant": variant["name"]}
             payload = runner.compare_prompt(
                 variant_prompt,
                 swap_options={
@@ -343,6 +366,8 @@ if pd is not None:
         "sft_norm_delta": "sft_norm_delta",
     }
     for item in results:
+        if "layers" not in item:
+            continue
         row = {
             "prompt": item["metadata"].get("prompt_idx", -1),
             "variant": item["metadata"].get("variant_name", "identity"),
@@ -353,15 +378,23 @@ if pd is not None:
             for layer_idx, value in summary.items():
                 row[f"{prefix}_L{layer_idx}"] = value
         summary_rows.append(row)
-    summary_df = pd.DataFrame(summary_rows)
-    display(summary_df.head())
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows)
+        display(summary_df.head())
+    elif results:
+        print("Multi-pass results detected; layer summary preview skipped.")
 
 # %% Manual Inspection
 if results:
     sample = results[0]
     print(f"Sample prompt: {sample['prompt'][:200]}...")
-    print("First layer stats for position 0:")
-    print(sample["layers"]["0"]["0"])
+    if "layers" in sample:
+        print("First layer stats for position 0:")
+        print(sample["layers"]["0"]["0"])
+    elif sample.get("pairwise"):
+        first_pair = sample["pairwise"][0]
+        print(f"Previewing pairwise diff '{first_pair['name']}' layer 0 pos 0:")
+        print(first_pair["layers"]["0"]["0"])
 
 # %% Cleanup
 torch.cuda.empty_cache()

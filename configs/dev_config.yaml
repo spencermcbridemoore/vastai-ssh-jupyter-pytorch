@@ -73,10 +73,9 @@ residual_compare:
   prompts:
     - "Explain the moon landing in one paragraph."
     - "Write a short Python function that adds two numbers."
+  # Keep fuzzing/perturbations opt-in by default.
   prompt_variants:
     - identity
-    - reverse_sentences
-    - dual_channel
   prompt_variant_options:
     dual_channel:
       base_prefix: "BASE PROMPT:\\n"
@@ -88,8 +87,8 @@ residual_compare:
   interesting_token_map:
     eos: "<|endoftext|>"
   local_run:
-    enabled: false
-    min_vram_gb: 24
+    enabled: true
+    min_vram_gb: 23.5
     require_gpu_name_substring: "4090"
     cuda_device_index: 0
     allowed_pairs:
@@ -99,6 +98,31 @@ residual_compare:
         dtype: "float16"
         model_kwargs:
           attn_implementation: "eager"
+        notes: "Baseline sanity pair for local smoke tests"
+      - base: "Qwen/Qwen2.5-0.5B"
+        sft: "Qwen/Qwen2.5-0.5B-Instruct"
+        device: "cuda"
+        dtype: "float16"
+        tokenizer: "Qwen/Qwen2.5-0.5B-Instruct"
+        model_kwargs:
+          attn_implementation: "eager"
+        notes: "Fits comfortably within 16 GB; safe on 20 GB budget"
+      - base: "Qwen/Qwen2.5-1.5B"
+        sft: "Qwen/Qwen2.5-1.5B-Instruct"
+        device: "cuda"
+        dtype: "float16"
+        tokenizer: "Qwen/Qwen2.5-1.5B-Instruct"
+        model_kwargs:
+          attn_implementation: "eager"
+        notes: "≈16 GB usage; still under 20 GB cap"
+      - base: "Qwen/Qwen2.5-Math-1.5B"
+        sft: "Qwen/Qwen2.5-Math-1.5B-Instruct"
+        device: "cuda"
+        dtype: "bfloat16"
+        tokenizer: "Qwen/Qwen2.5-Math-1.5B-Instruct"
+        model_kwargs:
+          attn_implementation: "eager"
+        notes: "Math domain variant with similar footprint"
   embedding_variants:
     - name: "default"
       base:
@@ -121,4 +145,82 @@ residual_compare:
       sft:
         embedding_source: "sft"
         unembedding_source: "sft"
+  model_sweep:
+    - name: "gpt2_baseline"
+      base_model: "gpt2"
+      sft_model: "gpt2"
+      dtype: "float16"
+      estimated_vram_gb: 4
+      notes: "Sanity check pair; confirm pipeline + logging work."
+    - name: "qwen-0.5b"
+      base_model: "Qwen/Qwen2.5-0.5B"
+      sft_model: "Qwen/Qwen2.5-0.5B-Instruct"
+      tokenizer: "Qwen/Qwen2.5-0.5B-Instruct"
+      dtype: "float16"
+      estimated_vram_gb: 10
+      notes: "Lightweight; should finish in minutes."
+    - name: "qwen-1.5b"
+      base_model: "Qwen/Qwen2.5-1.5B"
+      sft_model: "Qwen/Qwen2.5-1.5B-Instruct"
+      tokenizer: "Qwen/Qwen2.5-1.5B-Instruct"
+      dtype: "float16"
+      estimated_vram_gb: 18
+      notes: "Comfortably fits in 40 GB with full residual capture."
+    - name: "qwen-3b"
+      base_model: "Qwen/Qwen2.5-3B"
+      sft_model: "Qwen/Qwen2.5-3B-Instruct"
+      tokenizer: "Qwen/Qwen2.5-3B-Instruct"
+      dtype: "bfloat16"
+      estimated_vram_gb: 30
+      notes: "Heaviest Qwen pair before needing >40 GB."
+    - name: "qwen-7b"
+      base_model: "Qwen/Qwen2.5-7B"
+      sft_model: "Qwen/Qwen2.5-7B-Instruct"
+      tokenizer: "Qwen/Qwen2.5-7B-Instruct"
+      dtype: "bfloat16"
+      estimated_vram_gb: 39
+      notes: "Upper VRAM limit for a single 40 GB A100."
+    - name: "qwen-math-1.5b"
+      base_model: "Qwen/Qwen2.5-Math-1.5B"
+      sft_model: "Qwen/Qwen2.5-Math-1.5B-Instruct"
+      tokenizer: "Qwen/Qwen2.5-Math-1.5B-Instruct"
+      dtype: "bfloat16"
+      estimated_vram_gb: 20
+      notes: "Math-focused variant; similar footprint to generic 1.5B."
+    - name: "qwen-math-7b"
+      base_model: "Qwen/Qwen2.5-Math-7B"
+      sft_model: "Qwen/Qwen2.5-Math-7B-Instruct"
+      tokenizer: "Qwen/Qwen2.5-Math-7B-Instruct"
+      dtype: "bfloat16"
+      estimated_vram_gb: 39
+      notes: "Ensure math tokenizer is available in the cache."
+    - name: "llama-3.1-8b"
+      base_model: "meta-llama/Llama-3.1-8B"
+      sft_model: "meta-llama/Llama-3.1-8B-Instruct"
+      tokenizer: "meta-llama/Llama-3.1-8B-Instruct"
+      dtype: "bfloat16"
+      estimated_vram_gb: 34
+      notes: "Requires HF auth + license acceptance before download."
+  multi_pass:
+    enabled: false
+    runs:
+      - name: "BB"
+        model: "base"
+        embedding_source: "base"
+      - name: "BS"
+        model: "sft"
+        embedding_source: "base"
+      - name: "SB"
+        model: "base"
+        embedding_source: "sft"
+      - name: "SS"
+        model: "sft"
+        embedding_source: "sft"
+    pairwise_differences:
+      - ["BB", "BS"]
+      - ["BB", "SB"]
+      - ["BB", "SS"]
+      - ["BS", "SB"]
+      - ["BS", "SS"]
+      - ["SB", "SS"]
 

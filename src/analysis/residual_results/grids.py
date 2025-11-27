@@ -22,9 +22,10 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     pd = None  # type: ignore
 
-from .loader import ResidualResult, ResidualTokenStats
+from .loader import ResidualResult, ResidualRunRecord, ResidualRunTokenStats, ResidualTokenStats
 
 MetricFunc = Callable[[ResidualTokenStats], float]
+RunMetricFunc = Callable[[ResidualRunTokenStats], float]
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,10 @@ def available_residual_metrics() -> Tuple[str, ...]:
     return tuple(sorted(_RESIDUAL_METRICS.keys()))
 
 
+def available_run_metrics() -> Tuple[str, ...]:
+    return tuple(sorted(_RUN_METRICS.keys()))
+
+
 def build_residual_grid(result: ResidualResult, metric: str) -> LayerTokenGrid:
     if metric not in _RESIDUAL_METRICS:
         raise KeyError(f"Unknown residual metric '{metric}'. Known metrics: {available_residual_metrics()}")
@@ -106,6 +111,22 @@ def build_residual_grid(result: ResidualResult, metric: str) -> LayerTokenGrid:
         tokens=result.tokens,
         values=rows,
         metadata={"prompt": result.prompt},
+    )
+
+
+def build_run_grid(run: ResidualRunRecord, metric: str) -> LayerTokenGrid:
+    if metric not in _RUN_METRICS:
+        raise KeyError(f"Unknown run metric '{metric}'. Known metrics: {available_run_metrics()}")
+    evaluator = _RUN_METRICS[metric]
+    rows = tuple(_evaluate_run_layer(layer.positions, evaluator) for layer in run.layers)
+    layer_ids = tuple(layer.layer_index for layer in run.layers)
+    tokens = _run_tokens(run)
+    return LayerTokenGrid(
+        metric=f"run:{metric}",
+        layers=layer_ids,
+        tokens=tokens,
+        values=rows,
+        metadata={"run_name": run.name},
     )
 
 
@@ -141,6 +162,23 @@ def build_logit_grid(result: ResidualResult, token_id: int, source: str = "diff"
             "prompt": result.prompt,
             "token_id": token_id,
         },
+    )
+
+
+def build_run_logit_grid(run: ResidualRunRecord, token_id: int) -> LayerTokenGrid:
+    def evaluator(position: ResidualRunTokenStats) -> float:
+        value = position.tracked_token_logits.get(token_id)
+        return float(value) if value is not None else math.nan
+
+    rows = tuple(_evaluate_run_layer(layer.positions, evaluator) for layer in run.layers)
+    layer_ids = tuple(layer.layer_index for layer in run.layers)
+    tokens = _run_tokens(run)
+    return LayerTokenGrid(
+        metric="run:logits",
+        layers=layer_ids,
+        tokens=tokens,
+        values=rows,
+        metadata={"run_name": run.name, "token_id": token_id},
     )
 
 
@@ -209,6 +247,17 @@ def _evaluate_layer(positions: Tuple[ResidualTokenStats, ...], evaluator: Metric
     return tuple(row)
 
 
+def _evaluate_run_layer(positions: Tuple[ResidualRunTokenStats, ...], evaluator: RunMetricFunc) -> Tuple[float, ...]:
+    row: List[float] = []
+    for stats in positions:
+        try:
+            value = float(evaluator(stats))
+        except (TypeError, ValueError):
+            value = math.nan
+        row.append(value)
+    return tuple(row)
+
+
 def _metric(name: str, func: MetricFunc) -> Tuple[str, MetricFunc]:
     return (name, func)
 
@@ -230,4 +279,19 @@ _RESIDUAL_METRICS: Dict[str, MetricFunc] = dict(
         _metric("sft_norm_delta", lambda pos: pos.sft_norm_delta if pos.sft_norm_delta is not None else math.nan),
     ]
 )
+
+_RUN_METRICS: Dict[str, RunMetricFunc] = dict(
+    [
+        ("norm", lambda pos: pos.norm),
+        ("norm_delta", lambda pos: pos.norm_delta if pos.norm_delta is not None else math.nan),
+        ("entropy", lambda pos: pos.entropy),
+        ("cosine_prev", lambda pos: pos.cosine_prev if pos.cosine_prev is not None else math.nan),
+    ]
+)
+
+
+def _run_tokens(run: ResidualRunRecord) -> Tuple[str, ...]:
+    if not run.layers:
+        return tuple()
+    return tuple(position.token for position in run.layers[0].positions)
 
