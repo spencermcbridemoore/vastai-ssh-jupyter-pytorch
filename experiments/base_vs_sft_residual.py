@@ -7,17 +7,20 @@
 # %% Setup
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from statistics import mean
 from typing import Dict, List
 
 import torch
+from transformers import AutoTokenizer
 
-# Ensure src/ is on the path
+# Ensure repository root (and thereby src/) is on the path
 import sys
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+REPO_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 try:
     from IPython.display import display
@@ -51,6 +54,30 @@ compare_cfg = config.get("residual_compare", {})
 if not compare_cfg:
     raise ValueError("Config missing 'residual_compare' section. Please update configs to run this experiment.")
 compare_cfg = dict(compare_cfg)  # copy so we can mutate safely without touching original config dict
+
+ENV_OVERRIDE_MAP = {
+    "base_model": "RESIDUAL_BASE_MODEL",
+    "sft_model": "RESIDUAL_SFT_MODEL",
+    "tokenizer": "RESIDUAL_TOKENIZER",
+    "device": "RESIDUAL_DEVICE",
+    "dtype": "RESIDUAL_DTYPE",
+    "prompt_file": "RESIDUAL_PROMPT_FILE",
+    "tokenizer_kwargs": "RESIDUAL_TOKENIZER_KWARGS",
+    "model_kwargs": "RESIDUAL_MODEL_KWARGS",
+}
+JSON_OVERRIDE_KEYS = {"tokenizer_kwargs", "model_kwargs"}
+
+for key, env_var in ENV_OVERRIDE_MAP.items():
+    override_value = os.getenv(env_var)
+    if not override_value:
+        continue
+    if key in JSON_OVERRIDE_KEYS:
+        try:
+            compare_cfg[key] = json.loads(override_value)
+        except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+            raise ValueError(f"Failed to parse JSON override for {key}: {override_value}") from exc
+    else:
+        compare_cfg[key] = override_value
 
 LOCAL_OVERRIDE_KEYS = ("device", "dtype", "tokenizer", "tokenizer_kwargs", "model_kwargs")
 
@@ -144,7 +171,59 @@ def load_prompts(section: Dict[str, object]) -> List[str]:
     return prompts
 
 
+def _maybe_truncate_production_prompts(prompts: List[str], section: Dict[str, object]) -> List[str]:
+    prompt_file = section.get("prompt_file")
+    if not prompt_file:
+        return prompts
+    prompt_name = Path(prompt_file).name
+    if prompt_name != "prod_prompts.txt":
+        return prompts
+
+    tokenizer_name = section.get("tokenizer") or section.get("sft_model") or section.get("base_model")
+    if not tokenizer_name:
+        print(
+            "Skipping production prompt truncation: no tokenizer/base model specified to perform tokenization."
+        )
+        return prompts
+
+    tokenizer_kwargs = section.get("tokenizer_kwargs") or {}
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, **tokenizer_kwargs)
+
+    encoded_prompts = []
+    lengths = []
+    for prompt in prompts:
+        encoded = tokenizer(prompt, add_special_tokens=False)
+        ids = encoded["input_ids"]
+        encoded_prompts.append(ids)
+        lengths.append(len(ids))
+
+    if not lengths:
+        return prompts
+
+    target_len = min(lengths)
+    max_len = max(lengths)
+    if target_len == 0 or max_len == target_len:
+        return prompts
+
+    truncated_prompts: List[str] = []
+    for ids in encoded_prompts:
+        truncated_ids = ids[:target_len]
+        truncated_text = tokenizer.decode(
+            truncated_ids,
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
+        truncated_prompts.append(truncated_text)
+
+    print(
+        f"Normalized production prompts to {target_len} tokens "
+        f"(previous max length {max_len} tokens)."
+    )
+    return truncated_prompts
+
+
 prompts = load_prompts(compare_cfg)
+prompts = _maybe_truncate_production_prompts(prompts, compare_cfg)
 variant_names = compare_cfg.get("prompt_variants", ["identity"])
 variant_options = compare_cfg.get("prompt_variant_options", {})
 
@@ -219,7 +298,12 @@ print(f"Collected {len(results)} comparison results.")
 
 # %% Persist Results
 timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-output_path = ANALYSIS_DIR / f"residual_compare_{timestamp}.json"
+def _sanitize_for_filename(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9]+", "_", value or "").strip("_")
+    return sanitized or "model"
+
+model_label = _sanitize_for_filename(compare_cfg.get("sft_model") or compare_cfg.get("base_model") or "")
+output_path = ANALYSIS_DIR / f"residual_compare_{timestamp}_{model_label}.json"
 with open(output_path, "w", encoding="utf-8") as f:
     json.dump(results, f, indent=2)
 print(f"Wrote comparison JSON to: {output_path}")
