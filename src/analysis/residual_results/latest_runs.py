@@ -21,7 +21,7 @@ DEFAULT_BASE_DIRS: Sequence[Path] = (
     PROJECT_ROOT / "h200_outputs_multi",
 )
 DEFAULT_PATTERN = "residual_compare_*.json"
-TIMESTAMP_RE = re.compile(r"residual_compare_(\d{8})_(\d{6})", re.IGNORECASE)
+TIMESTAMP_RE = re.compile(r"(\d{8})_(\d{6})")
 
 
 @dataclass(frozen=True)
