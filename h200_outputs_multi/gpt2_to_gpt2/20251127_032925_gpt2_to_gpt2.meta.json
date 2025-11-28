@@ -1,0 +1,25 @@
+{
+  "timestamp": "20251127_032925",
+  "base_model": "gpt2",
+  "sft_model": "gpt2",
+  "prompts_processed": 4,
+  "prompt_variants": [
+    "identity"
+  ],
+  "results_serialized": 4,
+  "multi_pass_runs": [
+    "BB",
+    "BS",
+    "SB",
+    "SS"
+  ],
+  "multi_pass_pairwise": [
+    "BB-BS",
+    "BB-SB",
+    "BB-SS",
+    "BS-SB",
+    "BS-SS",
+    "SB-SS"
+  ],
+  "notes": "Generated with multi_pass.enabled=true (no prompt fuzzing by default)."
+}

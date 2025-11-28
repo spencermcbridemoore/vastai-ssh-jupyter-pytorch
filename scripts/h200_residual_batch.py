@@ -27,7 +27,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
@@ -47,6 +47,12 @@ def parse_args() -> argparse.Namespace:
         "--remote-dir",
         default="/workspace/vastai-ssh-jupyter-pytorch",
         help="Directory on the remote host containing this repository.",
+    )
+    parser.add_argument(
+        "--ssh-port",
+        type=int,
+        default=22,
+        help="SSH port for the remote host (default: %(default)s).",
     )
     parser.add_argument(
         "--config",
@@ -99,16 +105,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _load_sweep_entries(config_path: Path, names: Optional[Sequence[str]]) -> List[Dict[str, Any]]:
+def _load_config(config_path: Path) -> Dict[str, Any]:
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
     with config_path.open("r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle) or {}
+        return yaml.safe_load(handle) or {}
+
+
+def _load_sweep_entries(config: Mapping[str, Any], names: Optional[Sequence[str]]) -> List[Dict[str, Any]]:
     compare_cfg = config.get("residual_compare") or {}
     sweep = compare_cfg.get("model_sweep")
     if not sweep:
         raise ValueError(
-            f"{config_path} is missing residual_compare.model_sweep entries. "
+            "Config is missing residual_compare.model_sweep entries. "
             "Populate it or pass explicit --entries overrides."
         )
     entries: List[Dict[str, Any]] = []
@@ -160,29 +169,29 @@ def _env_exports(env: Dict[str, str]) -> str:
     return " ".join(f"{key}={shlex.quote(str(value))}" for key, value in env.items())
 
 
-def _ssh_base_cmd(identity: Optional[Path]) -> List[str]:
-    base = ["ssh"]
+def _ssh_base_cmd(identity: Optional[Path], port: int) -> List[str]:
+    base = ["ssh", "-p", str(port)]
     if identity:
         base.extend(["-i", str(identity)])
     return base
 
 
-def _scp_base_cmd(identity: Optional[Path]) -> List[str]:
-    base = ["scp"]
+def _scp_base_cmd(identity: Optional[Path], port: int) -> List[str]:
+    base = ["scp", "-P", str(port)]
     if identity:
         base.extend(["-i", str(identity)])
     return base
 
 
-def _run_remote(ssh_host: str, command: str, identity: Optional[Path]) -> subprocess.CompletedProcess[str]:
-    full_cmd = _ssh_base_cmd(identity) + [ssh_host, command]
+def _run_remote(ssh_host: str, command: str, identity: Optional[Path], port: int) -> subprocess.CompletedProcess[str]:
+    full_cmd = _ssh_base_cmd(identity, port) + [ssh_host, command]
     return subprocess.run(full_cmd, capture_output=True, text=True)
 
 
-def _copy_file(ssh_host: str, remote_path: str, local_path: Path, identity: Optional[Path]) -> None:
+def _copy_file(ssh_host: str, remote_path: str, local_path: Path, identity: Optional[Path], port: int) -> None:
     normalized = remote_path.replace("\\", "/")
     local_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = _scp_base_cmd(identity) + [f"{ssh_host}:{normalized}", str(local_path)]
+    cmd = _scp_base_cmd(identity, port) + [f"{ssh_host}:{normalized}", str(local_path)]
     subprocess.run(cmd, check=True)
 
 
@@ -201,26 +210,49 @@ def _write_log(local_dir: Path, entry_name: str, stdout: str, stderr: str) -> Pa
     return log_path
 
 
-def _append_manifest(manifest: Path, row: Dict[str, str]) -> None:
+def _append_manifest(manifest: Path, row: Dict[str, str], header: Sequence[str]) -> None:
     header_needed = not manifest.exists()
     with manifest.open("a", encoding="utf-8") as handle:
         if header_needed:
-            handle.write(",".join(row.keys()) + "\n")
-        handle.write(",".join(row.values()) + "\n")
+            handle.write(",".join(header) + "\n")
+        ordered = [row.get(key, "") for key in header]
+        handle.write(",".join(ordered) + "\n")
 
 
 def main() -> None:
     args = parse_args()
     try:
-        entries = _load_sweep_entries(args.config, args.entries)
+        config = _load_config(args.config)
+        entries = _load_sweep_entries(config, args.entries)
     except Exception as exc:  # pragma: no cover - defensive
         print(f"[fatal] {exc}", file=sys.stderr)
         sys.exit(1)
 
+    compare_cfg = config.get("residual_compare") or {}
+    multi_cfg = compare_cfg.get("multi_pass") or {}
+    multi_enabled = bool(multi_cfg.get("enabled"))
+
     extra_env = _parse_extra_env(args.extra_env)
     local_root = args.local_output
+    if multi_enabled and args.local_output == Path("h200_outputs"):
+        local_root = Path("h200_outputs_multi")
+        print(f"[info] multi_pass detected; redirecting local output to {local_root}")
     local_root.mkdir(parents=True, exist_ok=True)
-    manifest_path = local_root / "manifest.csv"
+    manifest_name = "manifest_multi.csv" if multi_enabled else "manifest.csv"
+    manifest_path = local_root / manifest_name
+    if multi_enabled:
+        manifest_header = [
+            "timestamp",
+            "entry",
+            "status",
+            "prompt_count",
+            "prompt_variants",
+            "multi_pass",
+            "json_path",
+            "log_path",
+        ]
+    else:
+        manifest_header = ["timestamp", "entry", "status", "json_path", "log_path"]
 
     for entry in entries:
         entry_dir = local_root / entry["name"]
@@ -234,7 +266,7 @@ def main() -> None:
             f"{env_line} python experiments/base_vs_sft_residual.py"
         )
         print(f"[run] {entry['name']} → {entry['base_model']} vs {entry['sft_model']}")
-        result = _run_remote(args.ssh_host, command, args.identity)
+        result = _run_remote(args.ssh_host, command, args.identity, args.ssh_port)
         log_path = _write_log(local_root, entry["name"], result.stdout, result.stderr)
         if args.verbose:
             print(result.stdout)
@@ -242,65 +274,71 @@ def main() -> None:
                 print(result.stderr, file=sys.stderr)
         if result.returncode != 0:
             print(f"[fail] {entry['name']} (see {log_path})")
-            _append_manifest(
-                manifest_path,
-                {
-                    "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
-                    "entry": entry["name"],
-                    "status": "failed",
-                    "json_path": "",
-                    "log_path": str(log_path),
-                },
-            )
+            row = {
+                "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
+                "entry": entry["name"],
+                "status": "failed",
+                "json_path": "",
+                "log_path": str(log_path),
+            }
+            if multi_enabled:
+                row.update({"prompt_count": "0", "prompt_variants": "", "multi_pass": "true"})
+            _append_manifest(manifest_path, row, manifest_header)
             continue
 
         json_path = _extract_json_path(result.stdout)
         if not json_path:
             print(f"[warn] Could not locate JSON path in output for {entry['name']} (see {log_path})")
-            _append_manifest(
-                manifest_path,
-                {
-                    "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
-                    "entry": entry["name"],
-                    "status": "missing-json",
-                    "json_path": "",
-                    "log_path": str(log_path),
-                },
-            )
+            row = {
+                "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
+                "entry": entry["name"],
+                "status": "missing-json",
+                "json_path": "",
+                "log_path": str(log_path),
+            }
+            if multi_enabled:
+                row.update({"prompt_count": "0", "prompt_variants": "", "multi_pass": "true"})
+            _append_manifest(manifest_path, row, manifest_header)
             continue
 
         local_json = entry_dir / Path(json_path).name
         try:
-            _copy_file(args.ssh_host, json_path, local_json, args.identity)
+            _copy_file(args.ssh_host, json_path, local_json, args.identity, args.ssh_port)
         except subprocess.CalledProcessError as exc:
             print(f"[warn] Failed to download JSON for {entry['name']}: {exc}")
-            _append_manifest(
-                manifest_path,
-                {
-                    "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
-                    "entry": entry["name"],
-                    "status": "download-failed",
-                    "json_path": "",
-                    "log_path": str(log_path),
-                },
-            )
+            row = {
+                "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
+                "entry": entry["name"],
+                "status": "download-failed",
+                "json_path": "",
+                "log_path": str(log_path),
+            }
+            if multi_enabled:
+                row.update({"prompt_count": "0", "prompt_variants": "", "multi_pass": "true"})
+            _append_manifest(manifest_path, row, manifest_header)
             continue
 
         print(f"[ok] {entry['name']} → {local_json}")
-        _append_manifest(
-            manifest_path,
-            {
-                "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
-                "entry": entry["name"],
-                "status": "success",
-                "json_path": str(local_json),
-                "log_path": str(log_path),
-            },
-        )
+        row = {
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
+            "entry": entry["name"],
+            "status": "success",
+            "json_path": str(local_json),
+            "log_path": str(log_path),
+        }
+        if multi_enabled:
+            row.update(
+                {
+                    "prompt_count": "",
+                    "prompt_variants": "",
+                    "multi_pass": "true",
+                }
+            )
+        _append_manifest(manifest_path, row, manifest_header)
 
     if args.shutdown:
         print("[info] Issuing remote shutdown …")
-        shutdown_result = _run_remote(args.ssh_host, "sudo shutdown -h now", args.identity)
+        shutdown_result = _run_remote(args.ssh_host, "sudo shutdown -h now", args.identity, args.ssh_port)
         if shutdown_result.returncode != 0:
             print("[warn] Remote shutdown command failed; please verify manually.")
         else:

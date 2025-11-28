@@ -77,15 +77,17 @@ for key, env_var in ENV_OVERRIDE_MAP.items():
         except json.JSONDecodeError as exc:  # pragma: no cover - defensive
             raise ValueError(f"Failed to parse JSON override for {key}: {override_value}") from exc
     else:
-        compare_cfg[key] = override_value
+        compare_cfg[key] = override_value.strip()
 
 LOCAL_OVERRIDE_KEYS = ("device", "dtype", "tokenizer", "tokenizer_kwargs", "model_kwargs")
 
 
 def _match_local_pair(local_cfg: Dict[str, object], base_model: str, sft_model: str) -> Dict[str, object]:
     allowed = local_cfg.get("allowed_pairs") or []
+    base_name = base_model.strip()
+    sft_name = sft_model.strip()
     for entry in allowed:
-        if entry.get("base") == base_model and entry.get("sft") == sft_model:
+        if entry.get("base") == base_name and entry.get("sft") == sft_name:
             return entry
     raise ValueError(
         f"Local run requested but pair ({base_model}, {sft_model}) is not listed in residual_compare.local_run.allowed_pairs."
@@ -146,6 +148,7 @@ if local_run_cfg.get("enabled"):
 
 ANALYSIS_DIR = PERSISTENT / "analyses" / "residual_compare"
 ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+MULTI_OUTPUT_ROOT = Path(__file__).parent.parent / "h200_outputs_multi"
 
 print(f"DEV_MODE: {DEV_MODE}")
 print(f"Analysis outputs will be written to: {ANALYSIS_DIR}")
@@ -321,16 +324,91 @@ print(f"Collected {len(results)} comparison results.")
 
 # %% Persist Results
 timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+def _write_multi_metadata(
+    log_path: Path,
+    *,
+    timestamp: str,
+    compare_cfg: Dict[str, object],
+    prompts_processed: int,
+    prompt_variants: List[str],
+    total_results: int,
+    multi_plan: MultiPassPlan,
+) -> None:
+    payload = {
+        "timestamp": timestamp,
+        "base_model": compare_cfg.get("base_model"),
+        "sft_model": compare_cfg.get("sft_model"),
+        "prompts_processed": prompts_processed,
+        "prompt_variants": prompt_variants,
+        "results_serialized": total_results,
+        "multi_pass_runs": [spec.name for spec in multi_plan.runs],
+        "multi_pass_pairwise": [spec.resolved_name() for spec in multi_plan.pairwise],
+        "notes": "Generated with multi_pass.enabled=true (no prompt fuzzing by default).",
+    }
+    log_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _append_multi_manifest(row: Dict[str, str]) -> None:
+    manifest_path = MULTI_OUTPUT_ROOT / "manifest_multi.csv"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    header_needed = not manifest_path.exists() or manifest_path.stat().st_size == 0
+    with manifest_path.open("a", encoding="utf-8") as handle:
+        if header_needed:
+            handle.write("timestamp,entry,prompt_count,prompt_variants,multi_pass,json_path,log_path\n")
+        handle.write(
+            "{timestamp},{entry},{prompt_count},{prompt_variants},{multi_pass},{json_path},{log_path}\n".format(**row)
+        )
+
+
 def _sanitize_for_filename(value: str) -> str:
     sanitized = re.sub(r"[^A-Za-z0-9]+", "_", value or "").strip("_")
     return sanitized or "model"
 
+
+def _pair_label_from_config(cfg: Dict[str, object]) -> str:
+    base = str(cfg.get("base_model") or "base")
+    sft = str(cfg.get("sft_model") or "sft")
+    return _sanitize_for_filename(f"{base}_to_{sft}")
+
 model_label = _sanitize_for_filename(compare_cfg.get("sft_model") or compare_cfg.get("base_model") or "")
-output_path = ANALYSIS_DIR / f"residual_compare_{timestamp}_{model_label}.json"
+output_dir = ANALYSIS_DIR
+output_filename = f"residual_compare_{timestamp}_{model_label}.json"
+pair_label = None
+if multi_pass_plan:
+    pair_label = _pair_label_from_config(compare_cfg)
+    output_dir = MULTI_OUTPUT_ROOT / pair_label
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_filename = f"multi_pass_{timestamp}_{pair_label}.json"
+
+output_path = output_dir / output_filename
 with open(output_path, "w", encoding="utf-8") as f:
     json.dump(results, f, indent=2)
 print(f"Wrote comparison JSON to: {output_path}")
 
+if multi_pass_plan and pair_label:
+    log_path = output_dir / f"{timestamp}_{pair_label}.meta.json"
+    _write_multi_metadata(
+        log_path,
+        timestamp=timestamp,
+        compare_cfg=compare_cfg,
+        prompts_processed=len(prompts),
+        prompt_variants=variant_names,
+        total_results=len(results),
+        multi_plan=multi_pass_plan,
+    )
+    _append_multi_manifest(
+        {
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
+            "entry": pair_label,
+            "prompt_count": str(len(results)),
+            "prompt_variants": "|".join(variant_names),
+            "multi_pass": "true",
+            "json_path": str(output_path),
+            "log_path": str(log_path),
+        }
+    )
+
+# %% Visualization Helpers
 # %% Visualization Helpers
 try:
     import pandas as pd

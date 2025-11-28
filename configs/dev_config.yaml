@@ -73,6 +73,8 @@ residual_compare:
   prompts:
     - "Explain the moon landing in one paragraph."
     - "Write a short Python function that adds two numbers."
+    - "Provide a balanced summary of the pros and cons of open sourcing frontier models."
+    - "Describe how you would teach Hamiltonian mechanics to a first-year physics student."
   # Keep fuzzing/perturbations opt-in by default.
   prompt_variants:
     - identity
@@ -123,6 +125,14 @@ residual_compare:
         model_kwargs:
           attn_implementation: "eager"
         notes: "Math domain variant with similar footprint"
+      - base: "nvidia/Mistral-NeMo-Minitron-8B-Base"
+        sft: "nvidia/Mistral-NeMo-Minitron-8B-Instruct"
+        device: "cuda"
+        dtype: "bfloat16"
+        tokenizer: "nvidia/Mistral-NeMo-Minitron-8B-Instruct"
+        model_kwargs:
+          attn_implementation: "eager"
+        notes: "Keep prompts ≤50 tokens on a single 24 GB RTX 4090."
   embedding_variants:
     - name: "default"
       base:
@@ -202,7 +212,7 @@ residual_compare:
       estimated_vram_gb: 34
       notes: "Requires HF auth + license acceptance before download."
   multi_pass:
-    enabled: false
+    enabled: true
     runs:
       - name: "BB"
         model: "base"

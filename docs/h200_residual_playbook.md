@@ -78,11 +78,37 @@ prevents rerunning pairs whose JSONs are already present locally.
   now defaults to `["identity"]`, storage stays roughly flat even though each
   prompt yields more structured data. Re-add `prompt_variants` entries if you
   still want perturbations.
+- **Outputs live under `h200_outputs_multi/`.** Each model pair receives its own
+  subdirectory (`h200_outputs_multi/<base>_to_<sft>/`) containing the raw JSON,
+  a `*.meta.json` summary log (prompts processed, run plan, timestamp), and
+  `manifest_multi.csv` tracks every invocation with the `prompt_variants` and
+  `multi_pass=true` flag. This mirrors the `h200_outputs/` layout but guarantees
+  the files are clearly marked as 4-pass, no-fuzz captures.
 - **Analysis tooling understands the richer file.** Use
   `scripts/residual_report.py ... --record-type runs` to summarize per-run grids,
   or keep the default `pairwise` mode to review BB‑BS style diffs. Existing
   helpers such as `build_residual_grid` continue to work because the `pairwise`
   payload keeps the legacy schema.
+
+### Local RTX 4090 workflows
+
+1. **Conda environment:** create an isolated env that mirrors the repo’s Python:
+   ```bash
+   conda create -n vastai python=3.12
+   conda activate vastai
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+   Reactivate this env (`conda activate vastai`) before running the multi-pass smoke
+   tests so CUDA, PyTorch, and the repo dependencies stay in sync.
+2. **Toggle local runs:** set `residual_compare.local_run.enabled: true` and ensure the
+   `allowed_pairs` block covers GPT-2, Qwen 0.5B, Qwen 1.5B, and Mistral-NeMo-Minitron-8B.
+   The experiment validates `torch.cuda.is_available()`, the GPU name contains the required
+   substring (e.g., `"4090"`), and VRAM ≥ the configured threshold before loading models.
+3. **Outputs:** every local multi-pass invocation now lands under `h200_outputs_multi/`
+   with a JSON artifact plus a matching `*.meta.json` summary. Append rows to
+   `manifest_multi.csv` after each run so you can track which prompt set completed
+   on which pair.
 
 ## 4. Verify + teardown (`teardown`)
 
