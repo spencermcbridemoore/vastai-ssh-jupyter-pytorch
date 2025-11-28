@@ -107,6 +107,20 @@ residual_compare:
       sft:
         embedding_source: "sft"
         unembedding_source: "sft"
+    - name: "shared_unembedding"
+      base:
+        embedding_source: "base"
+        unembedding_source: "sft"
+      sft:
+        embedding_source: "sft"
+        unembedding_source: "sft"
+    - name: "shared_embeddings"
+      base:
+        embedding_source: "sft"
+        unembedding_source: "base"
+      sft:
+        embedding_source: "sft"
+        unembedding_source: "sft"
   multi_pass:
     enabled: false
     runs:
@@ -129,17 +143,3 @@ residual_compare:
       - ["BS", "SB"]
       - ["BS", "SS"]
       - ["SB", "SS"]
-    - name: "shared_unembedding"
-      base:
-        embedding_source: "base"
-        unembedding_source: "sft"
-      sft:
-        embedding_source: "sft"
-        unembedding_source: "sft"
-    - name: "shared_embeddings"
-      base:
-        embedding_source: "sft"
-        unembedding_source: "base"
-      sft:
-        embedding_source: "sft"
-        unembedding_source: "sft"

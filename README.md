@@ -101,6 +101,16 @@ project/
    DEV_MODE = True
    ```
 
+### 4. Run the A100 Residual Sweep (optional)
+
+Need to sanity-check every supported model pair on a single A100 40 GB instance? Use the new sweep helper— it reads the inventory in `configs/dev_config.yaml` and reuses the prompts you just configured:
+
+```bash
+python scripts/run_residual_sweep.py --config configs/dev_config.yaml --skip-existing
+```
+
+Each run streams logs to `/workspace/persistent/analyses/residual_compare/logs` (with a repo-local fallback if `/workspace` isn’t writable) and writes JSON outputs as `residual_compare_<timestamp>_<model>.json`, where `<model>` is the sanitized SFT model identifier (spaces/dashes/slashes → underscores). Add `--names llama-3.1-8b qwen-7b` to target specific entries, `--dry-run` to preview commands, or `--force` if you need to bypass the A100 40 GB guardrail for debugging.
+
 ## Manage Vast.ai Instances
 
 Use the helper script to identify which of your Vast.ai instances are currently running (requires `VASTAI_API_KEY` in either your shell environment or `.env` file):
