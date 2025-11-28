@@ -28,6 +28,7 @@ from .loader import (
     iter_result_files,
     iter_results,
     load_results,
+    summarize_file,
 )
 from .loader_streaming import (
     chunked_metric_frames,
@@ -65,6 +66,7 @@ __all__ = [
     "latest_json_for",
     "list_models",
     "load_results",
+    "summarize_file",
     "stream_multi_pass_records",
     "stream_pairwise_results",
     "stream_raw_records",
