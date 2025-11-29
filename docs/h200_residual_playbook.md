@@ -90,6 +90,29 @@ prevents rerunning pairs whose JSONs are already present locally.
   helpers such as `build_residual_grid` continue to work because the `pairwise`
   payload keeps the legacy schema.
 
+### Physics prompt sweeps with 7-number summaries
+
+- **Notebook:** open `notebooks/h200_physics_prompt_residuals.ipynb` to drive the new
+  workflow. It mirrors the original long-form runner but automatically reads
+  `experiments/prompts/physics_answers_A.txt` and `physics_answers_B.txt`,
+  capping each group at 100 prompts. Each group is synced to the H200 under its
+  own prompt file (for example `physics_A_prompts.txt`) so you can rerun one set
+  without touching the other.
+- **Execution:** run the preflight cells (Vast detection, model prefetch, config
+  override) and then the `run_with_fallbacks` sweep. The notebook iterates over
+  both physics groups for every model, saving artifacts under
+  `notebooks/h200_long_outputs/<group>/<model>/…`. Logs are annotated with the
+  group name to simplify triage.
+- **Per-metric summaries:** after each JSON downloads, the notebook calls
+  `analysis.residual_results.statistics.save_metric_summary`, which reduces the
+  100 prompt-level scalars per metric down to a 7-number box/whisker bundle
+  (min, q1, median, q3, max, mean, std). These sidecar files live next to the
+  raw JSONs as `*_summary_stats.json` so downstream visualization code can load
+  them directly.
+- **Outputs table:** the concluding cell assembles a pandas dataframe listing
+  the group, model, JSON path, and summary path so you can confirm both physics
+  prompt sets finished before tearing down the instance.
+
 ### Local RTX 4090 workflows
 
 1. **Conda environment:** create an isolated env that mirrors the repo’s Python:
